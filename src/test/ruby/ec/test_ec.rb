@@ -577,7 +577,8 @@ class TestEC < TestCase
   # OpenSSL::PKey::ECError with the exact message "invalid signature (not a sequence)".
   # The sequence check lives in the outer method so the error propagates without being
   # re-wrapped with an "invalid signature: " prefix. The exact message is the
-  # observable behavior this test pins.  def test_dsa_verify_asn1_non_sequence_error
+  # observable behavior this test pins.
+  def test_dsa_verify_asn1_non_sequence_error
     key = OpenSSL::PKey::EC.generate("prime256v1")
 
     # A DER OCTET STRING — valid DER but not a SEQUENCE; triggers the guard.
