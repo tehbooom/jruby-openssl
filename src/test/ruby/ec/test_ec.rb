@@ -573,6 +573,30 @@ class TestEC < TestCase
     assert_sign_verify_false_or_error { key.verify_raw(nil, malformed_sig, data1) }
   end
 
+  # H1 regression: dsa_verify_asn1 with a non-sequence signature must raise
+  # OpenSSL::PKey::ECError with the EXACT message "invalid signature (not a sequence)".
+  # Pre-fix code caught the IllegalArgumentException thrown by BCInternal and re-raised
+  # it with a "invalid signature: " prefix, producing the double-wrapped message
+  # "invalid signature: invalid signature (not a sequence)".  The fix elevates the
+  # sequence check into the outer JRuby method so the RaiseException propagates
+  # directly.  The exact message string is the observable distinction.
+  def test_dsa_verify_asn1_non_sequence_error
+    key = OpenSSL::PKey::EC.generate("prime256v1")
+
+    # A DER OCTET STRING — valid DER but not a SEQUENCE; triggers the guard.
+    non_sequence_sig = OpenSSL::ASN1::OctetString.new("\x01\x02\x03").to_der
+
+    err = assert_raises(OpenSSL::PKey::ECError) do
+      key.dsa_verify_asn1("data", non_sequence_sig)
+    end
+    assert_equal "invalid signature (not a sequence)", err.message
+
+    # Positive control: a genuine signature over the same data verifies cleanly.
+    data = "hello"
+    sig = key.dsa_sign_asn1(data)
+    assert_equal true, key.dsa_verify_asn1(data, sig)
+  end
+
   def test_ECPrivateKey_encrypted
     p256 = Fixtures.pkey("p256")
     # key = abcdef (hardcoded encrypted PEM from MRI test suite)

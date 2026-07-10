@@ -38,7 +38,6 @@ import org.bouncycastle.asn1.ASN1Encoding;
 import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.jce.X509Principal;
-import org.bouncycastle.jce.provider.X509CertificateObject;
 
 import org.jruby.ext.openssl.SecurityHelper;
 
@@ -166,10 +165,6 @@ public class Name {
         final X509Certificate cert = wrapper.cert;
         if ( cert == null ) return equalTo( wrapper.getSubjectX500Principal() );
 
-        if ( cert instanceof X509CertificateObject ) {
-            return equalTo( cert.getSubjectDN() );
-        }
-        // otherwise need to take the 'expensive' path :
         return equalTo( cert.getSubjectX500Principal() );
     }
 

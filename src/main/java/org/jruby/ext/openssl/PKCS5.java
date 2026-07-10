@@ -27,10 +27,6 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import javax.crypto.Mac;
 
-import org.bouncycastle.crypto.CipherParameters;
-import org.bouncycastle.crypto.PBEParametersGenerator;
-import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator;
-import org.bouncycastle.crypto.params.KeyParameter;
 
 import org.jruby.Ruby;
 import org.jruby.RubyModule;
@@ -39,6 +35,11 @@ import org.jruby.RubyString;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyModule;
 import org.jruby.runtime.builtin.IRubyObject;
+
+import org.bouncycastle.crypto.CipherParameters;
+import org.bouncycastle.crypto.PBEParametersGenerator;
+import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator;
+import org.bouncycastle.crypto.params.KeyParameter;
 
 import static org.jruby.ext.openssl.KDF.newKDFError;
 
@@ -121,10 +122,19 @@ public class PKCS5 {
 
     static RubyString generatePBEKey(final Ruby runtime,
         final char[] pass, final byte[] salt, final int iter, final int keySize) {
-        PBEParametersGenerator generator = new PKCS5S2ParametersGenerator();
-        generator.init(PBEParametersGenerator.PKCS5PasswordToBytes(pass), salt, iter);
-        CipherParameters params = generator.generateDerivedParameters(keySize * 8);
-        return StringHelper.newString(runtime, ((KeyParameter) params).getKey());
+        return StringHelper.newString(runtime, BCInternal.generatePBEKey(pass, salt, iter, keySize));
+    }
+
+    // Lazy-loaded holder for bc-internal PBE classes absent from bc-fips.
+    private static final class BCInternal {
+        private BCInternal() {}
+
+        static byte[] generatePBEKey(final char[] pass, final byte[] salt, final int iter, final int keySize) {
+            PBEParametersGenerator generator = new PKCS5S2ParametersGenerator();
+            generator.init(PBEParametersGenerator.PKCS5PasswordToBytes(pass), salt, iter);
+            CipherParameters params = generator.generateDerivedParameters(keySize * 8);
+            return ((KeyParameter) params).getKey();
+        }
     }
 
     public static byte[] deriveKey( final Mac prf, byte[] salt, int iterationCount, int dkLen ) {

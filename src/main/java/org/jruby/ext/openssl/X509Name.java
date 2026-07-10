@@ -270,52 +270,66 @@ public class X509Name extends RubyObject {
     private void addEntry(ASN1ObjectIdentifier oid, RubyString value, final int type) throws RuntimeException {
         this.name = null;
         this.canonicalName = null;
-        this.values.add(NAME_ENTRY_CONVERTER.convertValueFor(oid, value, type));
+        this.values.add(BCInternal.convertValueFor(oid, value, type));
         this.oids.add(oid);
         this.types.add(type);
     }
 
-    private static final X509NameEntryConverterImpl NAME_ENTRY_CONVERTER = new X509NameEntryConverterImpl();
+    // Lazy-loaded holder — defers loading of X509DefaultEntryConverter (absent from bc-fips)
+    // until an X509Name entry is actually added or converted.
+    private static final class BCInternal {
+        private BCInternal() {}
 
-    private static class X509NameEntryConverterImpl extends X509DefaultEntryConverter {
+        private static final ConverterImpl CONVERTER = new ConverterImpl();
 
-        ASN1Primitive convertValueFor(final ASN1ObjectIdentifier oid, final RubyString value, final int type) {
-            switch (type) {
-                case ASN1.BIT_STRING:
-                    return new DERBitString(value.getBytes());
-                case ASN1.OCTET_STRING:
-                    return new DEROctetString(value.getBytes());
-                case ASN1.UTF8STRING:
-                    return new DERUTF8String(value.asJavaString());
-                case ASN1.NUMERICSTRING:
-                    return new DERNumericString(value.asJavaString()); // validate?
-                case ASN1.PRINTABLESTRING:
-                    return new DERPrintableString(value.asJavaString());
-                case ASN1.T61STRING:
-                    return new DERT61String(value.asJavaString());
-                case ASN1.VIDEOTEXSTRING:
-                    return new DERVideotexString(value.getBytes());
-                case ASN1.IA5STRING:
-                    return new DERIA5String(value.asJavaString());
-                case ASN1.GENERALIZEDTIME:
-                    return new DERGeneralizedTime(value.asJavaString());
-                case ASN1.UTCTIME:
-                    return new DERUTCTime(value.asJavaString());
-                case ASN1.GRAPHICSTRING:
-                    return new DERGraphicString(value.getBytes());
-                //case ASN1.ISO64STRING:
-                    //return new DERVisibleString(value.asJavaString());
-                case ASN1.GENERALSTRING:
-                    return new DERGeneralString(value.asJavaString());
-                case ASN1.UNIVERSALSTRING:
-                    return new DERUniversalString(value.getBytes());
-                case ASN1.BMPSTRING:
-                    return new DERBMPString(value.asJavaString());
-            }
-
-            return super.getConvertedValue(oid, value.toString());
+        static ASN1Primitive convertValueFor(final ASN1ObjectIdentifier oid, final RubyString value, final int type) {
+            return CONVERTER.convertValueFor(oid, value, type);
         }
 
+        static ASN1Primitive defaultConvertValue(final ASN1ObjectIdentifier oid, final String value) {
+            return new X509DefaultEntryConverter().getConvertedValue(oid, value);
+        }
+
+        private static class ConverterImpl extends X509DefaultEntryConverter {
+
+            ASN1Primitive convertValueFor(final ASN1ObjectIdentifier oid, final RubyString value, final int type) {
+                switch (type) {
+                    case ASN1.BIT_STRING:
+                        return new DERBitString(value.getBytes());
+                    case ASN1.OCTET_STRING:
+                        return new DEROctetString(value.getBytes());
+                    case ASN1.UTF8STRING:
+                        return new DERUTF8String(value.asJavaString());
+                    case ASN1.NUMERICSTRING:
+                        return new DERNumericString(value.asJavaString()); // validate?
+                    case ASN1.PRINTABLESTRING:
+                        return new DERPrintableString(value.asJavaString());
+                    case ASN1.T61STRING:
+                        return new DERT61String(value.asJavaString());
+                    case ASN1.VIDEOTEXSTRING:
+                        return new DERVideotexString(value.getBytes());
+                    case ASN1.IA5STRING:
+                        return new DERIA5String(value.asJavaString());
+                    case ASN1.GENERALIZEDTIME:
+                        return new DERGeneralizedTime(value.asJavaString());
+                    case ASN1.UTCTIME:
+                        return new DERUTCTime(value.asJavaString());
+                    case ASN1.GRAPHICSTRING:
+                        return new DERGraphicString(value.getBytes());
+                    //case ASN1.ISO64STRING:
+                        //return new DERVisibleString(value.asJavaString());
+                    case ASN1.GENERALSTRING:
+                        return new DERGeneralString(value.asJavaString());
+                    case ASN1.UNIVERSALSTRING:
+                        return new DERUniversalString(value.getBytes());
+                    case ASN1.BMPSTRING:
+                        return new DERBMPString(value.asJavaString());
+                }
+
+                return super.getConvertedValue(oid, value.toString());
+            }
+
+        }
     }
 
     @Override
@@ -767,7 +781,7 @@ public class X509Name extends RubyObject {
                     return (ASN1Primitive) ctor.newInstance(new Object[]{ value });
                 }
             }
-            return new X509DefaultEntryConverter().getConvertedValue(oid, value);
+            return BCInternal.defaultConvertValue(oid, value);
         }
         catch (NoSuchMethodException e) {
             throw newNameError(getRuntime(), e);
