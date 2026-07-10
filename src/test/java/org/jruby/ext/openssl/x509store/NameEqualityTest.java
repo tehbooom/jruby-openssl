@@ -29,13 +29,10 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * M1 regression: DN comparison must succeed when subject and issuer use the same
- * logical name but different ASN.1 string encodings (PrintableString vs UTF8String).
- *
- * Background: the original code had a fast-path through X509CertificateObject for
- * non-FIPS BC (encoding-tolerant). That class is absent in bc-fips so the path was
- * already dead under FIPS.  The current code always uses X500Principal.equals, which
- * RFC-4514-normalises and is also encoding-tolerant.  This test proves it.
+ * DN comparison must succeed when two names are logically equal but use different
+ * ASN.1 string encodings (e.g. PrintableString vs UTF8String) for the same value.
+ * Comparison goes through X500Principal.equals, which applies RFC-4514
+ * normalisation and is encoding-tolerant. This test guards that property.
  */
 public class NameEqualityTest {
 
