@@ -56,20 +56,7 @@ import org.bouncycastle.asn1.x9.X962Parameters;
 import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.asn1.x9.X9ECPoint;
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers;
-import org.bouncycastle.crypto.params.ECDomainParameters;
-import org.bouncycastle.crypto.params.ECPrivateKeyParameters;
-import org.bouncycastle.crypto.params.ECPublicKeyParameters;
-import org.bouncycastle.crypto.signers.ECDSASigner;
-import org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util;
-import org.bouncycastle.jcajce.provider.asymmetric.util.ECUtil;
-import org.bouncycastle.jcajce.provider.config.ProviderConfiguration;
-import org.bouncycastle.jce.ECNamedCurveTable;
-import org.bouncycastle.jce.ECPointUtil;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.jce.spec.ECNamedCurveParameterSpec;
-import org.bouncycastle.jce.spec.ECNamedCurveSpec;
 import org.bouncycastle.math.ec.ECAlgorithms;
-import org.bouncycastle.math.ec.ECCurve;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
 import org.jruby.RubyBignum;
@@ -1344,37 +1331,86 @@ public final class PKeyEC extends PKey {
      */
     private static final class BCInternal {
 
+        // JCA EllipticCurve → bc ECCurve, used by getDomainParametersFromName, publicKeyPointBytes,
+        // parseExplicitParams, groupToDerExplicit, and the PR-2 point-arithmetic methods.
+        static org.bouncycastle.math.ec.ECCurve jcaCurveToBC(final EllipticCurve curve) {
+            final java.security.spec.ECField field = curve.getField();
+            if (field instanceof java.security.spec.ECFieldFp) {
+                BigInteger p = ((java.security.spec.ECFieldFp) field).getP();
+                return new org.bouncycastle.math.ec.ECCurve.Fp(
+                        p,
+                        curve.getA(),
+                        curve.getB(),
+                        null, null);
+            }
+            throw new IllegalArgumentException("only Fp curves supported, got: " + field.getClass().getName());
+        }
+
+        // bc ECPoint → JCA ECPoint
+        static ECPoint bcPointToJca(final org.bouncycastle.math.ec.ECPoint bcPoint) {
+            final org.bouncycastle.math.ec.ECPoint norm = bcPoint.normalize();
+            return new ECPoint(norm.getAffineXCoord().toBigInteger(),
+                               norm.getAffineYCoord().toBigInteger());
+        }
+
+        // JCA ECPoint → bc ECPoint on the given bc ECCurve
+        static org.bouncycastle.math.ec.ECPoint jcaPointToBC(
+                final org.bouncycastle.math.ec.ECCurve bcCurve, final ECPoint jcaPoint) {
+            return bcCurve.createPoint(jcaPoint.getAffineX(), jcaPoint.getAffineY());
+        }
+
         static Optional<ASN1ObjectIdentifier> getCurveOID(String curveName) {
             if (curveName == null) return Optional.empty();
             if (curveName.indexOf(' ') == curveName.length() - 1) return Optional.empty();
-            return Optional.ofNullable(ECUtil.getNamedCurveOid(curveName));
+            return Optional.ofNullable(org.bouncycastle.asn1.x9.ECNamedCurveTable.getOID(curveName));
         }
 
         static String getCurveName(ASN1ObjectIdentifier oid) {
-            final String name = ECUtil.getCurveName(oid);
+            final String name = org.bouncycastle.asn1.x9.ECNamedCurveTable.getName(oid);
             if (name == null) {
                 throw new IllegalStateException("could not identify curve name from: " + oid);
             }
             return name;
         }
 
-        static ECNamedCurveParameterSpec getParameterSpec(String curveName) {
-            return ECNamedCurveTable.getParameterSpec(curveName);
+        static org.bouncycastle.asn1.x9.X9ECParameters getParameterSpec(String curveName) {
+            final org.bouncycastle.asn1.x9.X9ECParameters params =
+                    org.bouncycastle.asn1.x9.ECNamedCurveTable.getByName(curveName);
+            if (params == null) {
+                throw new IllegalArgumentException("unknown curve: " + curveName);
+            }
+            return params;
         }
 
         static ECParameterSpec getParamSpec(final String curveName) {
-            final ECNamedCurveParameterSpec ecCurveParamSpec = ECNamedCurveTable.getParameterSpec(curveName);
-            final EllipticCurve curve = EC5Util.convertCurve(ecCurveParamSpec.getCurve(), ecCurveParamSpec.getSeed());
-            return EC5Util.convertSpec(curve, ecCurveParamSpec);
+            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
+            final org.bouncycastle.math.ec.ECCurve bcCurve = x9.getCurve();
+            // Reconstruct JCA EllipticCurve from bc ECCurve.Fp parameters
+            final java.security.spec.ECField field;
+            if (bcCurve instanceof org.bouncycastle.math.ec.ECCurve.Fp) {
+                field = new java.security.spec.ECFieldFp(
+                        ((org.bouncycastle.math.ec.ECCurve.Fp) bcCurve).getQ());
+            } else {
+                throw new IllegalArgumentException("only Fp curves supported");
+            }
+            final EllipticCurve curve = new EllipticCurve(field,
+                    bcCurve.getA().toBigInteger(),
+                    bcCurve.getB().toBigInteger(),
+                    x9.getSeed());
+            final org.bouncycastle.math.ec.ECPoint g = x9.getG();
+            final ECPoint generator = new ECPoint(
+                    g.getAffineXCoord().toBigInteger(),
+                    g.getAffineYCoord().toBigInteger());
+            return new ECParameterSpec(curve, generator, x9.getN(), x9.getH().intValue());
         }
 
         static byte[] dsaSignAsn1(final ECPrivateKey privateKey, final String curveName, final byte[] data)
                 throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(true, new ECPrivateKeyParameters(
+            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
+            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
+            signer.init(true, new org.bouncycastle.crypto.params.ECPrivateKeyParameters(
                     privateKey.getS(),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
+                    new org.bouncycastle.crypto.params.ECDomainParameters(x9.getCurve(), x9.getG(), x9.getN(), x9.getH())
             ));
             BigInteger[] signature = signer.generateSignature(data);
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -1390,11 +1426,12 @@ public final class PKeyEC extends PKey {
         static boolean dsaVerifyAsn1(final ECPublicKey publicKey, final String curveName,
                                      final byte[] data, final ASN1Sequence seq)
                 throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(false, new ECPublicKeyParameters(
-                    EC5Util.convertPoint(publicKey.getParams(), publicKey.getW()),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
+            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
+            final org.bouncycastle.math.ec.ECCurve bcCurve = x9.getCurve();
+            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
+            signer.init(false, new org.bouncycastle.crypto.params.ECPublicKeyParameters(
+                    jcaPointToBC(bcCurve, publicKey.getW()),
+                    new org.bouncycastle.crypto.params.ECDomainParameters(bcCurve, x9.getG(), x9.getN(), x9.getH())
             ));
             ASN1Integer r = ASN1Integer.getInstance(seq.getObjectAt(0));
             ASN1Integer s = ASN1Integer.getInstance(seq.getObjectAt(1));
@@ -1404,11 +1441,12 @@ public final class PKeyEC extends PKey {
         static boolean verifyRawSignature(final ECPublicKey publicKey, final String curveName,
                                           final byte[] sign, final byte[] data)
                 throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(false, new ECPublicKeyParameters(
-                    EC5Util.convertPoint(publicKey.getParams(), publicKey.getW()),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
+            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
+            final org.bouncycastle.math.ec.ECCurve bcCurve = x9.getCurve();
+            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
+            signer.init(false, new org.bouncycastle.crypto.params.ECPublicKeyParameters(
+                    jcaPointToBC(bcCurve, publicKey.getW()),
+                    new org.bouncycastle.crypto.params.ECDomainParameters(bcCurve, x9.getG(), x9.getN(), x9.getH())
             ));
             ASN1Primitive vec = new ASN1InputStream(sign).readObject();
             if (!(vec instanceof ASN1Sequence)) return false;
@@ -1421,10 +1459,10 @@ public final class PKeyEC extends PKey {
         static org.bouncycastle.asn1.sec.ECPrivateKey toPrivateKeyStructure(
                 final ECPrivateKey privateKey, final ECPublicKey publicKey, final boolean compressed)
                 throws IOException {
-            final ProviderConfiguration configuration = BouncyCastleProvider.CONFIGURATION;
             final ECParameterSpec ecSpec = privateKey.getParams();
             final X962Parameters params = getDomainParametersFromName(ecSpec, compressed);
-            int orderBitLength = ECUtil.getOrderBitLength(configuration, ecSpec == null ? null : ecSpec.getOrder(), privateKey.getS());
+            final int orderBitLength = ecSpec != null ? ecSpec.getOrder().bitLength()
+                    : privateKey.getS().bitLength();
             if (publicKey == null) {
                 return new org.bouncycastle.asn1.sec.ECPrivateKey(orderBitLength, privateKey.getS(), params);
             }
@@ -1441,20 +1479,29 @@ public final class PKeyEC extends PKey {
         }
 
         static X962Parameters getDomainParametersFromName(ECParameterSpec ecSpec, boolean compressed) {
-            if (ecSpec instanceof ECNamedCurveSpec) {
-                ASN1ObjectIdentifier curveOid = ECUtil.getNamedCurveOid(((ECNamedCurveSpec) ecSpec).getName());
-                if (curveOid == null) {
-                    curveOid = new ASN1ObjectIdentifier(((ECNamedCurveSpec) ecSpec).getName());
-                }
-                return new X962Parameters(curveOid);
-            }
             if (ecSpec == null) {
                 return new X962Parameters(DERNull.INSTANCE);
             }
-            ECCurve curve = EC5Util.convertCurve(ecSpec.getCurve());
-            X9ECParameters ecParameters = new X9ECParameters(
-                    curve,
-                    new X9ECPoint(EC5Util.convertPoint(curve, ecSpec.getGenerator()), compressed),
+            // Detect named curve via AlgorithmParameters — works under both BC and BCFIPS
+            try {
+                AlgorithmParameters ap = AlgorithmParameters.getInstance("EC");
+                ap.init(ecSpec);
+                final String oidStr = ap.getParameterSpec(ECGenParameterSpec.class).getName();
+                // getParameterSpec returns either a short name ("P-256") or OID string
+                ASN1ObjectIdentifier curveOid = org.bouncycastle.asn1.x9.ECNamedCurveTable.getOID(oidStr);
+                if (curveOid == null && oidStr.indexOf('.') >= 0) {
+                    curveOid = new ASN1ObjectIdentifier(oidStr);
+                }
+                if (curveOid != null) {
+                    return new X962Parameters(curveOid);
+                }
+            } catch (Exception ignored) {
+                // not a named curve — fall through to explicit params
+            }
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ecSpec.getCurve());
+            final X9ECParameters ecParameters = new X9ECParameters(
+                    bcCurve,
+                    new X9ECPoint(jcaPointToBC(bcCurve, ecSpec.getGenerator()), compressed),
                     ecSpec.getOrder(),
                     BigInteger.valueOf(ecSpec.getCofactor()),
                     ecSpec.getCurve().getSeed());
@@ -1462,19 +1509,30 @@ public final class PKeyEC extends PKey {
         }
 
         static byte[] publicKeyPointBytes(final ECPublicKey publicKey) {
-            return EC5Util.convertPoint(publicKey.getParams(), publicKey.getW()).getEncoded(false);
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(publicKey.getParams().getCurve());
+            return jcaPointToBC(bcCurve, publicKey.getW()).getEncoded(false);
         }
 
         static ECParameterSpec parseExplicitParams(final X9ECParameters ecParams) {
-            final EllipticCurve curve = EC5Util.convertCurve(ecParams.getCurve(), ecParams.getSeed());
-            return new ECParameterSpec(curve, EC5Util.convertPoint(ecParams.getG()), ecParams.getN(), ecParams.getH().intValue());
+            final org.bouncycastle.math.ec.ECCurve bcCurve = ecParams.getCurve();
+            final java.security.spec.ECField field;
+            if (bcCurve instanceof org.bouncycastle.math.ec.ECCurve.Fp) {
+                field = new java.security.spec.ECFieldFp(
+                        ((org.bouncycastle.math.ec.ECCurve.Fp) bcCurve).getQ());
+            } else {
+                throw new IllegalArgumentException("only Fp curves supported");
+            }
+            final EllipticCurve curve = new EllipticCurve(field,
+                    bcCurve.getA().toBigInteger(), bcCurve.getB().toBigInteger(), ecParams.getSeed());
+            final ECPoint g = bcPointToJca(ecParams.getG());
+            return new ECParameterSpec(curve, g, ecParams.getN(), ecParams.getH().intValue());
         }
 
         static byte[] groupToDerExplicit(final ECParameterSpec ps) throws IOException {
-            final ECCurve bcCurve = EC5Util.convertCurve(ps.getCurve());
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ps.getCurve());
             final X9ECParameters ecParameters = new X9ECParameters(
                     bcCurve,
-                    new X9ECPoint(EC5Util.convertPoint(bcCurve, ps.getGenerator()), false),
+                    new X9ECPoint(jcaPointToBC(bcCurve, ps.getGenerator()), false),
                     ps.getOrder(),
                     BigInteger.valueOf(ps.getCofactor()),
                     ps.getCurve().getSeed());
@@ -1482,34 +1540,34 @@ public final class PKeyEC extends PKey {
         }
 
         static ECPoint decodePoint(final EllipticCurve curve, final byte[] encoded) {
-            return ECPointUtil.decodePoint(curve, encoded);
+            return bcPointToJca(jcaCurveToBC(curve).decodePoint(encoded));
         }
 
         static ECPoint pointAdd(final EllipticCurve selfCurve, final ECPoint self,
                                 final EllipticCurve otherCurve, final ECPoint other) {
-            final org.bouncycastle.math.ec.ECPoint bcSelf =
-                    EC5Util.convertPoint(EC5Util.convertCurve(selfCurve), self);
-            final org.bouncycastle.math.ec.ECPoint bcOther =
-                    EC5Util.convertPoint(EC5Util.convertCurve(otherCurve), other);
+            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfCurve);
+            final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcSelfCurve, self);
+            final org.bouncycastle.math.ec.ECCurve bcOtherCurve = jcaCurveToBC(otherCurve);
+            final org.bouncycastle.math.ec.ECPoint bcOther = jcaPointToBC(bcOtherCurve, other);
             final org.bouncycastle.math.ec.ECPoint result = bcSelf.add(bcOther);
-            return result == null ? null : EC5Util.convertPoint(result);
+            return result == null ? null : bcPointToJca(result);
         }
 
         static ECPoint pointMul(final EllipticCurve curve, final ECPoint self, final BigInteger bn) {
-            final ECCurve bcCurve = EC5Util.convertCurve(curve);
-            final org.bouncycastle.math.ec.ECPoint bcSelf = EC5Util.convertPoint(bcCurve, self);
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(curve);
+            final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcCurve, self);
             final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.referenceMultiply(bcSelf, bn);
-            return result == null ? null : EC5Util.convertPoint(result);
+            return result == null ? null : bcPointToJca(result);
         }
 
         static ECPoint pointMulTwo(final EllipticCurve selfCurve, final ECPoint self, final BigInteger bn,
                                    final EllipticCurve genCurve, final ECPoint generator, final BigInteger bn_g) {
-            final ECCurve bcSelfCurve = EC5Util.convertCurve(selfCurve);
-            final org.bouncycastle.math.ec.ECPoint bcSelf = EC5Util.convertPoint(bcSelfCurve, self);
-            final ECCurve bcGenCurve = EC5Util.convertCurve(genCurve);
-            final org.bouncycastle.math.ec.ECPoint bcGen = EC5Util.convertPoint(bcGenCurve, generator);
+            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfCurve);
+            final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcSelfCurve, self);
+            final org.bouncycastle.math.ec.ECCurve bcGenCurve = jcaCurveToBC(genCurve);
+            final org.bouncycastle.math.ec.ECPoint bcGen = jcaPointToBC(bcGenCurve, generator);
             final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.sumOfTwoMultiplies(bcGen, bn_g, bcSelf, bn);
-            return result == null ? null : EC5Util.convertPoint(result);
+            return result == null ? null : bcPointToJca(result);
         }
 
     }
