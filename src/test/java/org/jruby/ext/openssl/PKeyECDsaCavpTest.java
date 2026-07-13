@@ -18,6 +18,7 @@ import org.bouncycastle.asn1.ASN1Encoding;
 import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1InputStream;
 import org.bouncycastle.asn1.ASN1Sequence;
+import org.bouncycastle.asn1.BERSequence;
 import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.ASN1OutputStream;
 
@@ -42,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * BCInternal.dsaVerifyAsn1 itself.
  *
  * <h2>How the msg_hash values were derived</h2>
- * BCInternal receives pre-hashed bytes and passes them directly to ECDSASigner (no
+ * BCInternal receives pre-hashed bytes and passes them directly to NONEwithECDSA (no
  * additional hashing).  For the SigVer vectors the msg_hash is SHA-N(msg_bytes),
  * matching what the Python signing library hashed internally.  The JDK cross-check
  * uses Signature.initVerify + update(msg_bytes) + verify(sig) so it hashes internally
@@ -203,9 +204,9 @@ public class PKeyECDsaCavpTest {
     // =========================================================================
     // SigGen cross-check: BCInternal.dsaSignAsn1 output verified by JDK Signature
     //
-    // BCInternal.dsaSignAsn1 takes pre-hashed bytes and signs them with ECDSASigner.
+    // BCInternal.dsaSignAsn1 takes pre-hashed bytes and signs them with NONEwithECDSA.
     // The JDK's Signature.getInstance("SHA256withECDSA") hashes the raw message
-    // internally before verifying.  Because ECDSASigner in BCInternal is called with
+    // internally before verifying.  Because NONEwithECDSA in BCInternal is called with
     // the same bytes that SHA-N(msg) produces, and JDK verifies SHA-N(msg) internally,
     // the two paths agree on what was signed — making JDK an independent verifier of
     // BCInternal's sign output.
@@ -256,6 +257,128 @@ public class PKeyECDsaCavpTest {
     }
 
     // =========================================================================
+    // verifyRawSignature tests
+    //
+    // verifyRawSignature(pubKey, curve, signBytes, dataBytes) parses signBytes
+    // as DER and passes them directly to NONEwithECDSA Signature.verify().
+    // Tests confirm: valid sig accepted, wrong-key rejected (returns false, not
+    // throw), bad-sig-bytes rejected, and all three curves covered.
+    // =========================================================================
+
+    @Test
+    public void verifyRaw_P256_validSigAccepted() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp256r1", D_256, QX_256, QY_256);
+        ECPublicKey  pub  = buildPublicKey("secp256r1", QX_256, QY_256);
+        byte[] sig = callSign(priv, CURVE_256, HASH_256);
+        assertTrue(callVerifyRaw(pub, CURVE_256, sig, HASH_256),
+                "verifyRaw P-256: own-key round-trip must return true");
+    }
+
+    @Test
+    public void verifyRaw_P256_wrongKeyReturnsFalse() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp256r1", D_256, QX_256, QY_256);
+        byte[] sig = callSign(priv, CURVE_256, HASH_256);
+        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("EC");
+        kpg.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+        ECPublicKey wrongPub = (ECPublicKey) kpg.generateKeyPair().getPublic();
+        assertFalse(callVerifyRaw(wrongPub, CURVE_256, sig, HASH_256),
+                "verifyRaw P-256: wrong key must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P256_badSigReturnsFalse() throws Exception {
+        ECPublicKey pub = buildPublicKey("secp256r1", QX_256, QY_256);
+        // XOR the S value: still valid DER structure, invalid signature
+        byte[] badSig = buildDerSig(R_256, S_256.xor(BigInteger.ONE));
+        assertFalse(callVerifyRaw(pub, CURVE_256, badSig, HASH_256),
+                "verifyRaw P-256: corrupted S must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P256_notASequenceReturnsFalse() throws Exception {
+        ECPublicKey pub = buildPublicKey("secp256r1", QX_256, QY_256);
+        // A DER INTEGER (tag 0x02), not a SEQUENCE — verifyRawSignature returns false
+        byte[] notSeq = new byte[]{0x02, 0x01, 0x00};
+        assertFalse(callVerifyRaw(pub, CURVE_256, notSeq, HASH_256),
+                "verifyRaw P-256: non-sequence DER must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P384_validSigAccepted() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp384r1", D_384, QX_384, QY_384);
+        ECPublicKey  pub  = buildPublicKey("secp384r1", QX_384, QY_384);
+        byte[] sig = callSign(priv, CURVE_384, HASH_384);
+        assertTrue(callVerifyRaw(pub, CURVE_384, sig, HASH_384),
+                "verifyRaw P-384: own-key round-trip must return true");
+    }
+
+    @Test
+    public void verifyRaw_P384_wrongKeyReturnsFalse() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp384r1", D_384, QX_384, QY_384);
+        byte[] sig = callSign(priv, CURVE_384, HASH_384);
+        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("EC");
+        kpg.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+        ECPublicKey wrongPub = (ECPublicKey) kpg.generateKeyPair().getPublic();
+        assertFalse(callVerifyRaw(wrongPub, CURVE_384, sig, HASH_384),
+                "verifyRaw P-384: wrong key must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P384_badSigReturnsFalse() throws Exception {
+        ECPublicKey pub = buildPublicKey("secp384r1", QX_384, QY_384);
+        byte[] badSig = buildDerSig(R_384, S_384.xor(BigInteger.ONE));
+        assertFalse(callVerifyRaw(pub, CURVE_384, badSig, HASH_384),
+                "verifyRaw P-384: corrupted S must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P521_validSigAccepted() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp521r1", D_521, QX_521, QY_521);
+        ECPublicKey  pub  = buildPublicKey("secp521r1", QX_521, QY_521);
+        byte[] sig = callSign(priv, CURVE_521, HASH_512);
+        assertTrue(callVerifyRaw(pub, CURVE_521, sig, HASH_512),
+                "verifyRaw P-521: own-key round-trip must return true");
+    }
+
+    @Test
+    public void verifyRaw_P521_wrongKeyReturnsFalse() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp521r1", D_521, QX_521, QY_521);
+        byte[] sig = callSign(priv, CURVE_521, HASH_512);
+        java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("EC");
+        kpg.initialize(new java.security.spec.ECGenParameterSpec("secp521r1"));
+        ECPublicKey wrongPub = (ECPublicKey) kpg.generateKeyPair().getPublic();
+        assertFalse(callVerifyRaw(wrongPub, CURVE_521, sig, HASH_512),
+                "verifyRaw P-521: wrong key must return false, not throw");
+    }
+
+    @Test
+    public void verifyRaw_P521_badSigReturnsFalse() throws Exception {
+        ECPublicKey pub = buildPublicKey("secp521r1", QX_521, QY_521);
+        byte[] badSig = buildDerSig(R_521, S_521.xor(BigInteger.ONE));
+        assertFalse(callVerifyRaw(pub, CURVE_521, badSig, HASH_512),
+                "verifyRaw P-521: corrupted S must return false, not throw");
+    }
+
+    // =========================================================================
+    // verifyRawSignature non-canonical DER test (RANK-1 regression guard)
+    //
+    // A valid (r, s) pair is encoded as a BER SEQUENCE (indefinite-length form).
+    // This is a structurally valid ECDSA signature that any BER-aware parser
+    // accepts, but NONEwithECDSA's strict-DER verifier rejects the raw bytes.
+    // verifyRawSignature must re-encode to canonical DER before calling sig.verify
+    // so that a legitimate signature is never silently dropped.
+    // =========================================================================
+
+    @Test
+    public void verifyRaw_P256_nonCanonicalBerAccepted() throws Exception {
+        ECPrivateKey priv = buildPrivateKey("secp256r1", D_256, QX_256, QY_256);
+        ECPublicKey  pub  = buildPublicKey("secp256r1", QX_256, QY_256);
+        byte[] berSig = buildBerSig(R_256, S_256);
+        assertTrue(callVerifyRaw(pub, CURVE_256, berSig, HASH_256),
+                "verifyRaw P-256: BER-encoded (non-canonical) valid signature must be accepted");
+    }
+
+    // =========================================================================
     // helpers
     // =========================================================================
 
@@ -287,6 +410,18 @@ public class PKeyECDsaCavpTest {
         return buf.toByteArray();
     }
 
+    /** Encode (r, s) as a BER SEQUENCE (indefinite-length) — valid but non-canonical. */
+    private static byte[] buildBerSig(BigInteger r, BigInteger s) throws Exception {
+        ASN1EncodableVector v = new ASN1EncodableVector(2);
+        v.add(new ASN1Integer(r));
+        v.add(new ASN1Integer(s));
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        ASN1OutputStream out = ASN1OutputStream.create(buf, ASN1Encoding.BER);
+        out.writeObject(new BERSequence(v));
+        out.close();
+        return buf.toByteArray();
+    }
+
     private static ASN1Sequence toSeq(byte[] der) throws Exception {
         return (ASN1Sequence) new ASN1InputStream(der).readObject();
     }
@@ -306,6 +441,15 @@ public class PKeyECDsaCavpTest {
                 "dsaVerifyAsn1", ECPublicKey.class, String.class, byte[].class, ASN1Sequence.class);
         m.setAccessible(true);
         return (boolean) m.invoke(null, pub, curve, hash, seq);
+    }
+
+    private static boolean callVerifyRaw(ECPublicKey pub, String curve,
+                                          byte[] sign, byte[] data) throws Exception {
+        Class<?> bc = Class.forName("org.jruby.ext.openssl.PKeyEC$BCInternal");
+        java.lang.reflect.Method m = bc.getDeclaredMethod(
+                "verifyRawSignature", ECPublicKey.class, String.class, byte[].class, byte[].class);
+        m.setAccessible(true);
+        return (boolean) m.invoke(null, pub, curve, sign, data);
     }
 
     private static byte[] fromHex(String hex) {

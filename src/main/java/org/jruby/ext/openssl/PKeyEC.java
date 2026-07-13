@@ -450,9 +450,6 @@ public final class PKeyEC extends PKey {
             byte[] signed = BCInternal.dsaSignAsn1((ECPrivateKey) this.privateKey, getParameterSpecCurveName(), data.convertToString().getBytes());
             return StringHelper.newString(context.runtime, signed);
         }
-        catch (IOException ex) {
-            throw newECError(context.runtime, ex.getMessage());
-        }
         catch (Exception ex) {
             throw newECError(context.runtime, ex.toString(), ex);
         }
@@ -1434,10 +1431,14 @@ public final class PKeyEC extends PKey {
                 throws java.security.GeneralSecurityException, IOException {
             ASN1Primitive vec = new ASN1InputStream(sign).readObject();
             if (!(vec instanceof ASN1Sequence)) return false;
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            ASN1OutputStream out = ASN1OutputStream.create(buf, ASN1Encoding.DER);
+            out.writeObject(vec);
+            out.close();
             java.security.Signature sig = SecurityHelper.getSignature("NONEwithECDSA");
             sig.initVerify(publicKey);
             sig.update(data);
-            return sig.verify(sign);
+            return sig.verify(buf.toByteArray());
         }
 
         static org.bouncycastle.asn1.sec.ECPrivateKey toPrivateKeyStructure(
