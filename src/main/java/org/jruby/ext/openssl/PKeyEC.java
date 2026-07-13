@@ -474,7 +474,7 @@ public final class PKeyEC extends PKey {
         catch (RaiseException ex) {
             throw ex;
         }
-        catch (IOException|IllegalArgumentException|IllegalStateException ex) {
+        catch (Exception ex) {
             throw newECError(runtime, "invalid signature: " + ex.getMessage(), ex);
         }
     }
@@ -482,7 +482,7 @@ public final class PKeyEC extends PKey {
     // sign_raw(digest, data) -- signs pre-hashed (raw) bytes with the EC private key.
     // Produces a DER-encoded ASN.1 SEQUENCE [r, s], identical to dsa_sign_asn1.
     // The digest argument is accepted for API parity with RSA/DSA sign_raw but is unused;
-    // ECDSASigner operates directly on the supplied bytes without additional hashing.
+    // NONEwithECDSA passes data directly to the signer without additional hashing.
     @JRubyMethod(name = "sign_raw")
     public IRubyObject sign_raw(final ThreadContext context, final IRubyObject digest, final IRubyObject data) {
         return dsa_sign_asn1(context, data);
@@ -501,7 +501,7 @@ public final class PKeyEC extends PKey {
                     sign.convertToString().getBytes(), data.convertToString().getBytes());
             return runtime.newBoolean(verified);
         }
-        catch (IOException | IllegalArgumentException | IllegalStateException ex) {
+        catch (Exception ex) {
             debugStackTrace(runtime, ex);
             return runtime.getFalse();
         }
@@ -1404,56 +1404,40 @@ public final class PKeyEC extends PKey {
             return new ECParameterSpec(curve, generator, x9.getN(), x9.getH().intValue());
         }
 
+        // Sign pre-hashed bytes with NONEwithECDSA — no digest is applied by the JCA provider,
+        // matching the contract that callers pass already-hashed data.
+        // NONEwithECDSA is available in both BC and bc-fips; ECDSASigner is absent from bc-fips.
         static byte[] dsaSignAsn1(final ECPrivateKey privateKey, final String curveName, final byte[] data)
-                throws IOException {
-            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
-            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
-            signer.init(true, new org.bouncycastle.crypto.params.ECPrivateKeyParameters(
-                    privateKey.getS(),
-                    new org.bouncycastle.crypto.params.ECDomainParameters(x9.getCurve(), x9.getG(), x9.getN(), x9.getH())
-            ));
-            BigInteger[] signature = signer.generateSignature(data);
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            ASN1OutputStream asn1 = ASN1OutputStream.create(bytes, ASN1Encoding.DER);
-            ASN1EncodableVector v = new ASN1EncodableVector(2);
-            v.add(new ASN1Integer(signature[0]));
-            v.add(new ASN1Integer(signature[1]));
-            asn1.writeObject(new DERSequence(v));
-            asn1.close();
-            return bytes.toByteArray();
+                throws java.security.GeneralSecurityException {
+            java.security.Signature sig = SecurityHelper.getSignature("NONEwithECDSA");
+            sig.initSign(privateKey);
+            sig.update(data);
+            return sig.sign();
         }
 
         static boolean dsaVerifyAsn1(final ECPublicKey publicKey, final String curveName,
                                      final byte[] data, final ASN1Sequence seq)
-                throws IOException {
-            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
-            final org.bouncycastle.math.ec.ECCurve bcCurve = x9.getCurve();
-            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
-            signer.init(false, new org.bouncycastle.crypto.params.ECPublicKeyParameters(
-                    jcaPointToBC(bcCurve, publicKey.getW()),
-                    new org.bouncycastle.crypto.params.ECDomainParameters(bcCurve, x9.getG(), x9.getN(), x9.getH())
-            ));
-            ASN1Integer r = ASN1Integer.getInstance(seq.getObjectAt(0));
-            ASN1Integer s = ASN1Integer.getInstance(seq.getObjectAt(1));
-            return signer.verifySignature(data, r.getPositiveValue(), s.getPositiveValue());
+                throws java.security.GeneralSecurityException, IOException {
+            // Re-encode the ASN1Sequence to DER bytes for the JCA Signature.verify() API
+            org.jruby.ext.openssl.util.ByteArrayOutputStream buf = new org.jruby.ext.openssl.util.ByteArrayOutputStream();
+            ASN1OutputStream out = ASN1OutputStream.create(buf, ASN1Encoding.DER);
+            out.writeObject(seq);
+            out.close();
+            java.security.Signature sig = SecurityHelper.getSignature("NONEwithECDSA");
+            sig.initVerify(publicKey);
+            sig.update(data);
+            return sig.verify(buf.toByteArray());
         }
 
         static boolean verifyRawSignature(final ECPublicKey publicKey, final String curveName,
                                           final byte[] sign, final byte[] data)
-                throws IOException {
-            final org.bouncycastle.asn1.x9.X9ECParameters x9 = getParameterSpec(curveName);
-            final org.bouncycastle.math.ec.ECCurve bcCurve = x9.getCurve();
-            final org.bouncycastle.crypto.signers.ECDSASigner signer = new org.bouncycastle.crypto.signers.ECDSASigner();
-            signer.init(false, new org.bouncycastle.crypto.params.ECPublicKeyParameters(
-                    jcaPointToBC(bcCurve, publicKey.getW()),
-                    new org.bouncycastle.crypto.params.ECDomainParameters(bcCurve, x9.getG(), x9.getN(), x9.getH())
-            ));
+                throws java.security.GeneralSecurityException, IOException {
             ASN1Primitive vec = new ASN1InputStream(sign).readObject();
             if (!(vec instanceof ASN1Sequence)) return false;
-            ASN1Sequence seq = (ASN1Sequence) vec;
-            ASN1Integer r = ASN1Integer.getInstance(seq.getObjectAt(0));
-            ASN1Integer s = ASN1Integer.getInstance(seq.getObjectAt(1));
-            return signer.verifySignature(data, r.getPositiveValue(), s.getPositiveValue());
+            java.security.Signature sig = SecurityHelper.getSignature("NONEwithECDSA");
+            sig.initVerify(publicKey);
+            sig.update(data);
+            return sig.verify(sign);
         }
 
         static org.bouncycastle.asn1.sec.ECPrivateKey toPrivateKeyStructure(
