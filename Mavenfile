@@ -94,7 +94,7 @@ plugin :surefire, '3.5.5' do
   # FipsCoverageTest requires the fips-tests profile (bc-fips on classpath, non-FIPS BC excluded).
   # Exclude it from the default execution so it doesn't run with non-FIPS BC present.
   execute_goal :test, :id => 'default-test',
-    :excludes => [ '**/FipsCoverageTest.java', '**/PKeyECDsaCavpTest.java', '**/PKeyECPointArithmeticTest.java' ]
+    :excludes => [ '**/FipsCoverageTest.java', '**/PKeyECDsaCavpTest.java', '**/PKeyECPointArithmeticTest.java', '**/BCInternalGroupToDerExplicitTest.java' ]
 end
 
 # NOTE: to build on Java 11 - installing gems fails (due old jossl) with:
@@ -194,7 +194,7 @@ profile :id => 'fips-tests' do
 
     # FIPS-only execution: bc-fips on classpath, non-FIPS BC excluded.
     execute_goal :test, :id => 'fips-coverage',
-      :includes => [ '**/FipsCoverageTest.java', '**/PKeyECDsaCavpTest.java', '**/PKeyECPointArithmeticTest.java' ],
+      :includes => [ '**/FipsCoverageTest.java', '**/PKeyECDsaCavpTest.java', '**/PKeyECPointArithmeticTest.java', '**/BCInternalGroupToDerExplicitTest.java' ],
       :classpathDependencyExcludes => [
         'org.bouncycastle:bcprov-jdk18on',
         'org.bouncycastle:bcpkix-jdk18on',

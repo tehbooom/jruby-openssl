@@ -99,6 +99,78 @@ public class PKeyECPointArithmeticTest {
             "94d6ea487def5f58dba75a82335c91a7124f66ea28a526acd35b17da646a37df72", 16);
 
     // =========================================================================
+    // P-384 known-answer data for pointAdd and pointMulTwo (verified by Python)
+    //
+    // n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973
+    // Note: K2_384 > n, so the effective scalar is K2_384 % n.
+    // Q = ec.derive_private_key(K2_384 % n, SECP384R1(), backend).public_key().public_numbers()
+    // ADD result: ec.derive_private_key((K384 + K2_384) % n, SECP384R1(), backend).public_key().public_numbers()
+    // MULTWO result: ec.derive_private_key((K2_384 * K384 + B_384) % n, SECP384R1(), backend).public_key().public_numbers()
+    // =========================================================================
+    private static final BigInteger K2_384 = new BigInteger(
+            "b3d4e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3" +
+            "e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3", 16);
+    // ADD384_QX/QY = (K2_384 mod n)*G, Python cryptography 42.x
+    private static final BigInteger ADD384_QX = new BigInteger(
+            "c377da41788dda12d649d6921e8379e9c02b1567b6561e269e65a987a8a4bdaa" +
+            "486701a9ddfa8a03bdad82b96b4072ed", 16);
+    private static final BigInteger ADD384_QY = new BigInteger(
+            "ddd51a59d1bcc8dcd1e7c46ade71aacabd11b110649625e8da47f66016b4b12b" +
+            "7e697828d0c23df573de398dbffe5277", 16);
+    // ADD384_RX/RY = (K384 + K2_384 mod n)*G, Python cryptography 42.x
+    private static final BigInteger ADD384_RX = new BigInteger(
+            "a74bb33f798ee39a28b3f5dffbf9cea2f6fee2cbd8176d707822aaeba72c88ac" +
+            "6079f58024982a0ddb512f17c5986fe6", 16);
+    private static final BigInteger ADD384_RY = new BigInteger(
+            "c21a75b60b28aba74acfc53b5b485a9600d8333e29e7081703647213d2592154" +
+            "a1383e35140533a5a16f559cbf1ec4ab", 16);
+
+    private static final BigInteger B_384 = new BigInteger(
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" +
+            "fedcba9876543210fedcba9876543210", 16);
+    // MULTWO384_RX/RY = (K2_384*K384 + B_384 mod n)*G, Python cryptography 42.x
+    private static final BigInteger MULTWO384_RX = new BigInteger(
+            "fe32b134fad008385c3b0bf35cfc7f6a251bb8c2ca3f97ef03241ff20210a963" +
+            "ea954827aeee29a134ed15aeaaaa92ed", 16);
+    private static final BigInteger MULTWO384_RY = new BigInteger(
+            "4ad711608fd173cb274e127b70c1bda8e317f068aeac4b1a1cf79fcda0f9aa1c" +
+            "42d0896007efa1ecf682f56270a3fa3b", 16);
+
+    // =========================================================================
+    // P-521 known-answer data for pointAdd and pointMulTwo (verified by Python)
+    //
+    // Python cross-check commands:
+    //   K2_521 = 0x00a1b2...f0; B_521 = 0x10fedc...10
+    //   # pointAdd: P=K521*G, Q=K2_521*G, R=(K521+K2_521 mod n)*G
+    //   # pointMulTwo: (K2_521*K521 + B_521 mod n)*G
+    // =========================================================================
+    private static final BigInteger K2_521 = new BigInteger(
+            "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0" +
+            "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0", 16);
+    private static final BigInteger ADD521_QX = new BigInteger(
+            "78de28289192d4869ccb9d981bf9944a694baf835cab832858f22031a2342205" +
+            "287c1d8978efd6e477f3f912ec1bbf2d5e6ec2e800872ea83e6aab45fb2ca743f2", 16);
+    private static final BigInteger ADD521_QY = new BigInteger(
+            "64e06b5aad28dec3425e297b50176c8e5795b55265904809de09189923cf28f1" +
+            "d8902aadffcee3b1150e5dd9f65d612773e1b7e07900e29f9e61ad86776ba1be0e", 16);
+    private static final BigInteger ADD521_RX = new BigInteger(
+            "1a857730519cb0367e43c95277169daa58984c281ba34c2d605f12ee178b13202" +
+            "3cff4cf87db8ab5212c0661de8b42d16c46ab2cb0f3dbc6a69fb629bb51ebb3ff6", 16);
+    private static final BigInteger ADD521_RY = new BigInteger(
+            "116275f77014ae24f1d13f7fdd0905af098e7d3421a4c59ff5f2ab97a19fcbce" +
+            "c0d1177452158f5387e2ee090ad410bc96f319347530448e543acb5814acae2b896", 16);
+
+    private static final BigInteger B_521 = new BigInteger(
+            "10fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" +
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16);
+    private static final BigInteger MULTWO521_RX = new BigInteger(
+            "12a442225e25af6fdf7895fce64feacf3c3fff590c95ed0feec645f23c12b2074" +
+            "b1dfbc9eb422ab049fa29a11d98b59414ffea5621212b47fc4d8440c6c98174c71", 16);
+    private static final BigInteger MULTWO521_RY = new BigInteger(
+            "82261975596b99466e4281dfbcc62381f75370aa4a58ac038dea2b3abd99e311e" +
+            "a543868a84470cb9f3f0dc24438887f7ed1257c505e5b5fe18958f2bf5a1a8102", 16);
+
+    // =========================================================================
     // pointMul tests
     // =========================================================================
 
@@ -180,6 +252,34 @@ public class PKeyECPointArithmeticTest {
         }
     }
 
+    @Test
+    public void pointAdd_P384_pPlusQ() throws Exception {
+        ECParameterSpec spec = spec("secp384r1");
+        ECPoint p = new ECPoint(MUL384_RX, MUL384_RY);     // K384*G
+        ECPoint q = new ECPoint(ADD384_QX, ADD384_QY);      // K2_384*G
+
+        ECPoint result = callPointAdd(spec, p, spec, q);
+
+        assertEquals(ADD384_RX, result.getAffineX(),
+                "P-384 pointAdd: Rx must match Python-verified (k1+k2)*G");
+        assertEquals(ADD384_RY, result.getAffineY(),
+                "P-384 pointAdd: Ry must match Python-verified (k1+k2)*G");
+    }
+
+    @Test
+    public void pointAdd_P521_pPlusQ() throws Exception {
+        ECParameterSpec spec = spec("secp521r1");
+        ECPoint p = new ECPoint(MUL521_RX, MUL521_RY);     // K521*G
+        ECPoint q = new ECPoint(ADD521_QX, ADD521_QY);      // K2_521*G
+
+        ECPoint result = callPointAdd(spec, p, spec, q);
+
+        assertEquals(ADD521_RX, result.getAffineX(),
+                "P-521 pointAdd: Rx must match Python-verified (k1+k2)*G");
+        assertEquals(ADD521_RY, result.getAffineY(),
+                "P-521 pointAdd: Ry must match Python-verified (k1+k2)*G");
+    }
+
     // =========================================================================
     // pointMulTwo tests
     // =========================================================================
@@ -210,6 +310,38 @@ public class PKeyECPointArithmeticTest {
 
         assertFalse(MULTWO256_RX.equals(result.getAffineX()) && MULTWO256_RY.equals(result.getAffineY()),
                 "P-256 pointMulTwo red-sensitivity: wrong scalar must not equal expected point");
+    }
+
+    @Test
+    public void pointMulTwo_P384_aPlusbG() throws Exception {
+        ECParameterSpec spec = spec("secp384r1");
+        ECPoint p = new ECPoint(MUL384_RX, MUL384_RY);  // P = K384*G
+        ECPoint g = spec.getGenerator();
+
+        // BCInternal.pointMulTwo(selfSpec, P, K2_384, genSpec, G, B_384)
+        // = sumOfTwoMultiplies(G, B_384, P, K2_384) = B_384*G + K2_384*P
+        ECPoint result = callPointMulTwo(spec, p, K2_384, spec, g, B_384);
+
+        assertEquals(MULTWO384_RX, result.getAffineX(),
+                "P-384 pointMulTwo: Rx must match Python-verified (K2*P + B*G)");
+        assertEquals(MULTWO384_RY, result.getAffineY(),
+                "P-384 pointMulTwo: Ry must match Python-verified (K2*P + B*G)");
+    }
+
+    @Test
+    public void pointMulTwo_P521_aPlusbG() throws Exception {
+        ECParameterSpec spec = spec("secp521r1");
+        ECPoint p = new ECPoint(MUL521_RX, MUL521_RY);  // P = K521*G
+        ECPoint g = spec.getGenerator();
+
+        // BCInternal.pointMulTwo(selfSpec, P, K2_521, genSpec, G, B_521)
+        // = sumOfTwoMultiplies(G, B_521, P, K2_521) = B_521*G + K2_521*P
+        ECPoint result = callPointMulTwo(spec, p, K2_521, spec, g, B_521);
+
+        assertEquals(MULTWO521_RX, result.getAffineX(),
+                "P-521 pointMulTwo: Rx must match Python-verified (K2*P + B*G)");
+        assertEquals(MULTWO521_RY, result.getAffineY(),
+                "P-521 pointMulTwo: Ry must match Python-verified (K2*P + B*G)");
     }
 
     // =========================================================================
