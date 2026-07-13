@@ -330,6 +330,19 @@ DO NOT MODIFY - GENERATED CODE
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.5</version>
+        <executions>
+          <execution>
+            <id>default-test</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
+            <configuration>
+              <excludes>
+                <exclude>**/FipsCoverageTest.java</exclude>
+              </excludes>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <artifactId>maven-deploy-plugin</artifactId>
@@ -664,6 +677,54 @@ DO NOT MODIFY - GENERATED CODE
           </plugin>
         </plugins>
       </build>
+    </profile>
+    <profile>
+      <id>fips-tests</id>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <version>3.5.5</version>
+            <executions>
+              <execution>
+                <id>default-test</id>
+                <goals>
+                  <goal>test</goal>
+                </goals>
+                <configuration>
+                  <skip>true</skip>
+                </configuration>
+              </execution>
+              <execution>
+                <id>fips-coverage</id>
+                <goals>
+                  <goal>test</goal>
+                </goals>
+                <configuration>
+                  <includes>
+                    <include>**/FipsCoverageTest.java</include>
+                  </includes>
+                  <classpathDependencyExcludes>
+                    <classpathDependencyExclude>org.bouncycastle:bcprov-jdk18on</classpathDependencyExclude>
+                    <classpathDependencyExclude>org.bouncycastle:bcpkix-jdk18on</classpathDependencyExclude>
+                    <classpathDependencyExclude>org.bouncycastle:bctls-jdk18on</classpathDependencyExclude>
+                    <classpathDependencyExclude>org.bouncycastle:bcutil-jdk18on</classpathDependencyExclude>
+                  </classpathDependencyExcludes>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+      <dependencies>
+        <dependency>
+          <groupId>org.bouncycastle</groupId>
+          <artifactId>bc-fips</artifactId>
+          <version>2.0.1</version>
+          <scope>system</scope>
+          <systemPath>${fips.jar}</systemPath>
+        </dependency>
+      </dependencies>
     </profile>
   </profiles>
 </project>

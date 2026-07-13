@@ -90,7 +90,12 @@ jar 'org.junit.jupiter:junit-jupiter', '5.11.4', :scope => :test
 # a test dependency to provide digest and other stdlib bits, needed when loading OpenSSL in Java unit tests
 jar 'org.jruby:jruby-stdlib', jruby_compile_compat, :scope => :test
 
-plugin :surefire, '3.5.5'
+plugin :surefire, '3.5.5' do
+  # FipsCoverageTest requires the fips-tests profile (bc-fips on classpath, non-FIPS BC excluded).
+  # Exclude it from the default execution so it doesn't run with non-FIPS BC present.
+  execute_goal :test, :id => 'default-test',
+    :excludes => [ '**/FipsCoverageTest.java' ]
+end
 
 # NOTE: to build on Java 11 - installing gems fails (due old jossl) with:
 #  load error: jopenssl/load -- java.lang.StringIndexOutOfBoundsException
@@ -172,6 +177,30 @@ end
 profile :id => 'release' do
   plugin :gpg, '3.1.0' do
     execute_goal :sign, :phase => :verify
+  end
+end
+
+# Run FIPS-only tests against bc-fips with non-FIPS BC excluded from the classpath.
+# Usage: ./mvnw test -Pfips-tests -Dfips.jar=/path/to/bc-fips-2.0.1.jar
+# The fips.jar property must point to a local bc-fips jar (not on Maven Central).
+profile :id => 'fips-tests' do
+  dependency 'org.bouncycastle', 'bc-fips', '2.0.1',
+    :scope => :system,
+    :systemPath => '${fips.jar}'
+
+  plugin :surefire, '3.5.5' do
+    # Skip the default execution entirely — this profile runs ONLY the FIPS-isolated tests.
+    execute_goal :test, :id => 'default-test', :skip => true
+
+    # FIPS-only execution: bc-fips on classpath, non-FIPS BC excluded.
+    execute_goal :test, :id => 'fips-coverage',
+      :includes => [ '**/FipsCoverageTest.java' ],
+      :classpathDependencyExcludes => [
+        'org.bouncycastle:bcprov-jdk18on',
+        'org.bouncycastle:bcpkix-jdk18on',
+        'org.bouncycastle:bctls-jdk18on',
+        'org.bouncycastle:bcutil-jdk18on'
+      ]
   end
 end
 
