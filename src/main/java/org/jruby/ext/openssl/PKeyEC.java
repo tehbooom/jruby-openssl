@@ -1124,7 +1124,7 @@ public final class PKeyEC extends PKey {
                 encoded = bn.convertToString().getBytes();
             }
             try {
-                this.point = BCInternal.decodePoint(group.getCurve(), encoded);
+                this.point = BCInternal.decodePoint(group.getParamSpec(), encoded);
             }
             catch (IllegalArgumentException ex) {
                 // MRI: OpenSSL::PKey::EC::Point::Error: invalid encoding
@@ -1248,8 +1248,8 @@ public final class PKeyEC extends PKey {
             Group groupV = this.group;
             Point otherPoint = (Point) other;
             ECPoint resultPoint = BCInternal.pointAdd(
-                    groupV.getCurve(), asECPoint(),
-                    otherPoint.group.getCurve(), otherPoint.asECPoint());
+                    groupV.getParamSpec(), asECPoint(),
+                    otherPoint.group.getParamSpec(), otherPoint.asECPoint());
             if (resultPoint == null) {
                 throw newECError(runtime, "EC_POINT_add");
             }
@@ -1266,7 +1266,7 @@ public final class PKeyEC extends PKey {
 
             Group groupV = this.group;
             BigInteger bn = getBigInteger(context, bn1);
-            ECPoint mulPoint = BCInternal.pointMul(groupV.getCurve(), asECPoint(), bn);
+            ECPoint mulPoint = BCInternal.pointMul(groupV.getParamSpec(), asECPoint(), bn);
             if (mulPoint == null) {
                 throw newECError(runtime, "bad multiply result");
             }
@@ -1287,8 +1287,8 @@ public final class PKeyEC extends PKey {
             BigInteger bn_g = getBigInteger(context, bn2);
             ECPoint generatorPoint = ((Point) groupV.generator(context)).asECPoint();
             ECPoint mulPoint = BCInternal.pointMulTwo(
-                    groupV.getCurve(), asECPoint(), bn,
-                    groupV.getCurve(), generatorPoint, bn_g);
+                    groupV.getParamSpec(), asECPoint(), bn,
+                    groupV.getParamSpec(), generatorPoint, bn_g);
 
             if (mulPoint == null) {
                 throw newECError(runtime, "bad multiply result");
@@ -1328,9 +1328,9 @@ public final class PKeyEC extends PKey {
      */
     private static final class BCInternal {
 
-        // JCA EllipticCurve → bc ECCurve, used by getDomainParametersFromName, publicKeyPointBytes,
-        // parseExplicitParams, groupToDerExplicit, and the PR-2 point-arithmetic methods.
-        static org.bouncycastle.math.ec.ECCurve jcaCurveToBC(final EllipticCurve curve) {
+        // JCA EllipticCurve → bc ECCurve.  bc-fips requires non-null order and cofactor.
+        static org.bouncycastle.math.ec.ECCurve jcaCurveToBC(final EllipticCurve curve,
+                final BigInteger order, final BigInteger cofactor) {
             final java.security.spec.ECField field = curve.getField();
             if (field instanceof java.security.spec.ECFieldFp) {
                 BigInteger p = ((java.security.spec.ECFieldFp) field).getP();
@@ -1338,9 +1338,15 @@ public final class PKeyEC extends PKey {
                         p,
                         curve.getA(),
                         curve.getB(),
-                        null, null);
+                        order, cofactor);
             }
             throw new IllegalArgumentException("only Fp curves supported, got: " + field.getClass().getName());
+        }
+
+        // Convenience overload for callers that have ECParameterSpec.
+        static org.bouncycastle.math.ec.ECCurve jcaCurveToBC(final ECParameterSpec spec) {
+            return jcaCurveToBC(spec.getCurve(), spec.getOrder(),
+                    BigInteger.valueOf(spec.getCofactor()));
         }
 
         // bc ECPoint → JCA ECPoint
@@ -1483,7 +1489,7 @@ public final class PKeyEC extends PKey {
             } catch (Exception ignored) {
                 // not a named curve — fall through to explicit params
             }
-            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ecSpec.getCurve());
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ecSpec);
             final X9ECParameters ecParameters = new X9ECParameters(
                     bcCurve,
                     new X9ECPoint(jcaPointToBC(bcCurve, ecSpec.getGenerator()), compressed),
@@ -1494,7 +1500,7 @@ public final class PKeyEC extends PKey {
         }
 
         static byte[] publicKeyPointBytes(final ECPublicKey publicKey) {
-            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(publicKey.getParams().getCurve());
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(publicKey.getParams());
             return jcaPointToBC(bcCurve, publicKey.getW()).getEncoded(false);
         }
 
@@ -1514,7 +1520,7 @@ public final class PKeyEC extends PKey {
         }
 
         static byte[] groupToDerExplicit(final ECParameterSpec ps) throws IOException {
-            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ps.getCurve());
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(ps);
             final X9ECParameters ecParameters = new X9ECParameters(
                     bcCurve,
                     new X9ECPoint(jcaPointToBC(bcCurve, ps.getGenerator()), false),
@@ -1524,32 +1530,32 @@ public final class PKeyEC extends PKey {
             return ecParameters.getEncoded(ASN1Encoding.DER);
         }
 
-        static ECPoint decodePoint(final EllipticCurve curve, final byte[] encoded) {
-            return bcPointToJca(jcaCurveToBC(curve).decodePoint(encoded));
+        static ECPoint decodePoint(final ECParameterSpec spec, final byte[] encoded) {
+            return bcPointToJca(jcaCurveToBC(spec).decodePoint(encoded));
         }
 
-        static ECPoint pointAdd(final EllipticCurve selfCurve, final ECPoint self,
-                                final EllipticCurve otherCurve, final ECPoint other) {
-            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfCurve);
+        static ECPoint pointAdd(final ECParameterSpec selfSpec, final ECPoint self,
+                                final ECParameterSpec otherSpec, final ECPoint other) {
+            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfSpec);
             final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcSelfCurve, self);
-            final org.bouncycastle.math.ec.ECCurve bcOtherCurve = jcaCurveToBC(otherCurve);
+            final org.bouncycastle.math.ec.ECCurve bcOtherCurve = jcaCurveToBC(otherSpec);
             final org.bouncycastle.math.ec.ECPoint bcOther = jcaPointToBC(bcOtherCurve, other);
             final org.bouncycastle.math.ec.ECPoint result = bcSelf.add(bcOther);
             return result == null ? null : bcPointToJca(result);
         }
 
-        static ECPoint pointMul(final EllipticCurve curve, final ECPoint self, final BigInteger bn) {
-            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(curve);
+        static ECPoint pointMul(final ECParameterSpec spec, final ECPoint self, final BigInteger bn) {
+            final org.bouncycastle.math.ec.ECCurve bcCurve = jcaCurveToBC(spec);
             final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcCurve, self);
             final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.referenceMultiply(bcSelf, bn);
             return result == null ? null : bcPointToJca(result);
         }
 
-        static ECPoint pointMulTwo(final EllipticCurve selfCurve, final ECPoint self, final BigInteger bn,
-                                   final EllipticCurve genCurve, final ECPoint generator, final BigInteger bn_g) {
-            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfCurve);
+        static ECPoint pointMulTwo(final ECParameterSpec selfSpec, final ECPoint self, final BigInteger bn,
+                                   final ECParameterSpec genSpec, final ECPoint generator, final BigInteger bn_g) {
+            final org.bouncycastle.math.ec.ECCurve bcSelfCurve = jcaCurveToBC(selfSpec);
             final org.bouncycastle.math.ec.ECPoint bcSelf = jcaPointToBC(bcSelfCurve, self);
-            final org.bouncycastle.math.ec.ECCurve bcGenCurve = jcaCurveToBC(genCurve);
+            final org.bouncycastle.math.ec.ECCurve bcGenCurve = jcaCurveToBC(genSpec);
             final org.bouncycastle.math.ec.ECPoint bcGen = jcaPointToBC(bcGenCurve, generator);
             final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.sumOfTwoMultiplies(bcGen, bn_g, bcSelf, bn);
             return result == null ? null : bcPointToJca(result);

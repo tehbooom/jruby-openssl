@@ -340,6 +340,7 @@ DO NOT MODIFY - GENERATED CODE
               <excludes>
                 <exclude>**/FipsCoverageTest.java</exclude>
                 <exclude>**/PKeyECDsaCavpTest.java</exclude>
+                <exclude>**/PKeyECPointArithmeticTest.java</exclude>
               </excludes>
             </configuration>
           </execution>
@@ -705,6 +706,7 @@ DO NOT MODIFY - GENERATED CODE
                   <includes>
                     <include>**/FipsCoverageTest.java</include>
                     <include>**/PKeyECDsaCavpTest.java</include>
+                    <include>**/PKeyECPointArithmeticTest.java</include>
                   </includes>
                   <classpathDependencyExcludes>
                     <classpathDependencyExclude>org.bouncycastle:bcprov-jdk18on</classpathDependencyExclude>
