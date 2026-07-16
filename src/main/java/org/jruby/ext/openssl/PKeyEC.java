@@ -21,6 +21,7 @@ import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.Signature;
 
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
@@ -44,7 +45,6 @@ import org.bouncycastle.asn1.ASN1Encoding;
 import org.bouncycastle.asn1.ASN1InputStream;
 import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
-import org.bouncycastle.asn1.ASN1OutputStream;
 import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DERNull;
@@ -56,10 +56,6 @@ import org.bouncycastle.asn1.x9.X962Parameters;
 import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.asn1.x9.X9ECPoint;
 import org.bouncycastle.asn1.x9.X9ObjectIdentifiers;
-import org.bouncycastle.crypto.params.ECDomainParameters;
-import org.bouncycastle.crypto.params.ECPrivateKeyParameters;
-import org.bouncycastle.crypto.params.ECPublicKeyParameters;
-import org.bouncycastle.crypto.signers.ECDSASigner;
 import org.bouncycastle.jcajce.provider.asymmetric.util.EC5Util;
 import org.bouncycastle.jcajce.provider.asymmetric.util.ECUtil;
 import org.bouncycastle.jcajce.provider.config.ProviderConfiguration;
@@ -68,11 +64,9 @@ import org.bouncycastle.jce.ECPointUtil;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECNamedCurveParameterSpec;
 import org.bouncycastle.jce.spec.ECNamedCurveSpec;
-import org.bouncycastle.math.ec.ECAlgorithms;
 import org.bouncycastle.math.ec.ECCurve;
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
-import org.jruby.RubyBignum;
 import org.jruby.RubyBoolean;
 import org.jruby.RubyClass;
 import org.jruby.RubyFixnum;
@@ -94,7 +88,6 @@ import org.jruby.runtime.component.VariableEntry;
 import org.jruby.ext.openssl.impl.CipherSpec;
 import org.jruby.ext.openssl.impl.ECPrivateKeyWithName;
 
-import org.jruby.ext.openssl.util.ByteArrayOutputStream;
 import org.jruby.ext.openssl.x509store.PEMInputOutput;
 
 import static org.jruby.ext.openssl.OpenSSL.debug;
@@ -460,11 +453,11 @@ public final class PKeyEC extends PKey {
             throw newECError(context.runtime, "Private EC key needed!");
         }
         try {
-            byte[] signed = BCInternal.dsaSignAsn1((ECPrivateKey) this.privateKey, getParameterSpecCurveName(), data.convertToString().getBytes());
+            final Signature signer = SecurityHelper.getSignature("NONEwithECDSA");
+            signer.initSign(privateKey, OpenSSL.getSecureRandom(context));
+            signer.update(data.convertToString().getBytes());
+            byte[] signed = signer.sign();
             return StringHelper.newString(context.runtime, signed);
-        }
-        catch (IOException ex) {
-            throw newECError(context.runtime, ex.getMessage());
         }
         catch (Exception ex) {
             throw newECError(context.runtime, ex.toString(), ex);
@@ -480,14 +473,14 @@ public final class PKeyEC extends PKey {
             if (!(vec instanceof ASN1Sequence)) {
                 throw newECError(runtime, "invalid signature (not a sequence)");
             }
-            boolean verify = BCInternal.dsaVerifyAsn1(publicKey, getParameterSpecCurveName(),
-                    data.convertToString().getBytes(), (ASN1Sequence) vec);
+            boolean verify = verifyRawECDSA(publicKey, data.convertToString().getBytes(),
+                    canonicalECDSASignature((ASN1Sequence) vec));
             return runtime.newBoolean(verify);
         }
         catch (RaiseException ex) {
             throw ex;
         }
-        catch (IOException|IllegalArgumentException|IllegalStateException ex) {
+        catch (GeneralSecurityException|IOException|IllegalArgumentException|IllegalStateException ex) {
             throw newECError(runtime, "invalid signature: " + ex.getMessage(), ex);
         }
     }
@@ -495,7 +488,7 @@ public final class PKeyEC extends PKey {
     // sign_raw(digest, data) -- signs pre-hashed (raw) bytes with the EC private key.
     // Produces a DER-encoded ASN.1 SEQUENCE [r, s], identical to dsa_sign_asn1.
     // The digest argument is accepted for API parity with RSA/DSA sign_raw but is unused;
-    // ECDSASigner operates directly on the supplied bytes without additional hashing.
+    // NONEwithECDSA operates directly on the supplied bytes without additional hashing.
     @JRubyMethod(name = "sign_raw")
     public IRubyObject sign_raw(final ThreadContext context, final IRubyObject digest, final IRubyObject data) {
         return dsa_sign_asn1(context, data);
@@ -510,14 +503,31 @@ public final class PKeyEC extends PKey {
                                   final IRubyObject sign, final IRubyObject data) {
         final Ruby runtime = context.runtime;
         try {
-            boolean verified = BCInternal.verifyRawSignature(publicKey, getParameterSpecCurveName(),
-                    sign.convertToString().getBytes(), data.convertToString().getBytes());
+            final ASN1Primitive vec = new ASN1InputStream(sign.convertToString().getBytes()).readObject();
+            if (!(vec instanceof ASN1Sequence)) return runtime.getFalse();
+            boolean verified = verifyRawECDSA(publicKey, data.convertToString().getBytes(),
+                    canonicalECDSASignature((ASN1Sequence) vec));
             return runtime.newBoolean(verified);
         }
-        catch (IOException | IllegalArgumentException | IllegalStateException ex) {
+        catch (GeneralSecurityException | IOException | IllegalArgumentException | IllegalStateException ex) {
             debugStackTrace(runtime, ex);
             return runtime.getFalse();
         }
+    }
+
+    private static boolean verifyRawECDSA(final ECPublicKey publicKey, final byte[] data,
+                                          final byte[] signature) throws GeneralSecurityException {
+        final Signature verifier = SecurityHelper.getSignature("NONEwithECDSA");
+        verifier.initVerify(publicKey);
+        verifier.update(data);
+        return verifier.verify(signature);
+    }
+
+    private static byte[] canonicalECDSASignature(final ASN1Sequence sequence) throws IOException {
+        final ASN1EncodableVector values = new ASN1EncodableVector(2);
+        values.add(new ASN1Integer(ASN1Integer.getInstance(sequence.getObjectAt(0)).getPositiveValue()));
+        values.add(new ASN1Integer(ASN1Integer.getInstance(sequence.getObjectAt(1)).getPositiveValue()));
+        return new DERSequence(values).getEncoded(ASN1Encoding.DER);
     }
 
     @JRubyMethod(name = "dh_compute_key")
@@ -1258,66 +1268,6 @@ public final class PKeyEC extends PKey {
             return ObjectSupport.inspect(this, (List) Collections.singletonList(entry));
         }
 
-        @JRubyMethod(name = "add")
-        public IRubyObject add(final ThreadContext context, final IRubyObject other) {
-            Ruby runtime = context.runtime;
-            Group groupV = this.group;
-            Point otherPoint = (Point) other;
-            ECPoint resultPoint = BCInternal.pointAdd(
-                    groupV.getCurve(), asECPoint(),
-                    otherPoint.group.getCurve(), otherPoint.asECPoint());
-            if (resultPoint == null) {
-                throw newECError(runtime, "EC_POINT_add");
-            }
-            return new Point(runtime, resultPoint, group);
-        }
-
-        @JRubyMethod(name = "mul")
-        public IRubyObject mul(final ThreadContext context, final IRubyObject bn1) {
-            Ruby runtime = context.runtime;
-
-            if (bn1 instanceof RubyArray) {
-                throw runtime.newNotImplementedError("calling #mul with arrays is not supported by this OpenSSL version");
-            }
-
-            Group groupV = this.group;
-            BigInteger bn = getBigInteger(context, bn1);
-            ECPoint mulPoint = BCInternal.pointMul(groupV.getCurve(), asECPoint(), bn);
-            if (mulPoint == null) {
-                throw newECError(runtime, "bad multiply result");
-            }
-
-            return new Point(runtime, mulPoint, groupV);
-        }
-
-        @JRubyMethod(name = "mul")
-        public IRubyObject mul(final ThreadContext context, final IRubyObject bn1, final IRubyObject bn2) {
-            Ruby runtime = context.runtime;
-
-            if (bn1 instanceof RubyArray) {
-                throw runtime.newNotImplementedError("calling #mul with arrays is not supported by this OpenSSL version");
-            }
-
-            Group groupV = this.group;
-            BigInteger bn = getBigInteger(context, bn1);
-            BigInteger bn_g = getBigInteger(context, bn2);
-            ECPoint generatorPoint = ((Point) groupV.generator(context)).asECPoint();
-            ECPoint mulPoint = BCInternal.pointMulTwo(
-                    groupV.getCurve(), asECPoint(), bn,
-                    groupV.getCurve(), generatorPoint, bn_g);
-
-            if (mulPoint == null) {
-                throw newECError(runtime, "bad multiply result");
-            }
-
-            return new Point(runtime, mulPoint, groupV);
-        }
-
-        @JRubyMethod(name = "mul")
-        public IRubyObject mul(final ThreadContext context, final IRubyObject bns, final IRubyObject points, final IRubyObject bn2) {
-            throw context.runtime.newNotImplementedError("calling #mul with arrays is not supported by this OpenSSL version");
-        }
-
         @Deprecated
         public IRubyObject initialize(final ThreadContext context, final IRubyObject[] args) {
             final int argc = Arity.checkArgumentCount(context.runtime, args, 1, 2);
@@ -1336,7 +1286,7 @@ public final class PKeyEC extends PKey {
 
     /**
      * Isolates all compile-time references to bc-jce/jcajce-provider-internal classes
-     * (EC5Util, ECUtil, ECDSASigner, ECNamedCurveTable, ECPointUtil, etc.) that are absent
+     * (EC5Util, ECUtil, ECNamedCurveTable, ECPointUtil, etc.) that are absent
      * from bc-fips.  PKeyEC.class holds no direct bytecode references to those classes;
      * this nested class is loaded lazily by the JVM only when one of its methods is first
      * called at runtime.  Under non-FIPS BouncyCastle the behaviour is byte-for-byte
@@ -1358,64 +1308,10 @@ public final class PKeyEC extends PKey {
             return name;
         }
 
-        static ECNamedCurveParameterSpec getParameterSpec(String curveName) {
-            return ECNamedCurveTable.getParameterSpec(curveName);
-        }
-
         static ECParameterSpec getParamSpec(final String curveName) {
             final ECNamedCurveParameterSpec ecCurveParamSpec = ECNamedCurveTable.getParameterSpec(curveName);
             final EllipticCurve curve = EC5Util.convertCurve(ecCurveParamSpec.getCurve(), ecCurveParamSpec.getSeed());
             return EC5Util.convertSpec(curve, ecCurveParamSpec);
-        }
-
-        static byte[] dsaSignAsn1(final ECPrivateKey privateKey, final String curveName, final byte[] data)
-                throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(true, new ECPrivateKeyParameters(
-                    privateKey.getS(),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
-            ));
-            BigInteger[] signature = signer.generateSignature(data);
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            ASN1OutputStream asn1 = ASN1OutputStream.create(bytes, ASN1Encoding.DER);
-            ASN1EncodableVector v = new ASN1EncodableVector(2);
-            v.add(new ASN1Integer(signature[0]));
-            v.add(new ASN1Integer(signature[1]));
-            asn1.writeObject(new DERSequence(v));
-            asn1.close();
-            return bytes.toByteArray();
-        }
-
-        static boolean dsaVerifyAsn1(final ECPublicKey publicKey, final String curveName,
-                                     final byte[] data, final ASN1Sequence seq)
-                throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(false, new ECPublicKeyParameters(
-                    EC5Util.convertPoint(publicKey.getParams(), publicKey.getW()),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
-            ));
-            ASN1Integer r = ASN1Integer.getInstance(seq.getObjectAt(0));
-            ASN1Integer s = ASN1Integer.getInstance(seq.getObjectAt(1));
-            return signer.verifySignature(data, r.getPositiveValue(), s.getPositiveValue());
-        }
-
-        static boolean verifyRawSignature(final ECPublicKey publicKey, final String curveName,
-                                          final byte[] sign, final byte[] data)
-                throws IOException {
-            final ECNamedCurveParameterSpec params = getParameterSpec(curveName);
-            final ECDSASigner signer = new ECDSASigner();
-            signer.init(false, new ECPublicKeyParameters(
-                    EC5Util.convertPoint(publicKey.getParams(), publicKey.getW()),
-                    new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH())
-            ));
-            ASN1Primitive vec = new ASN1InputStream(sign).readObject();
-            if (!(vec instanceof ASN1Sequence)) return false;
-            ASN1Sequence seq = (ASN1Sequence) vec;
-            ASN1Integer r = ASN1Integer.getInstance(seq.getObjectAt(0));
-            ASN1Integer s = ASN1Integer.getInstance(seq.getObjectAt(1));
-            return signer.verifySignature(data, r.getPositiveValue(), s.getPositiveValue());
         }
 
         static org.bouncycastle.asn1.sec.ECPrivateKey toPrivateKeyStructure(
@@ -1485,48 +1381,6 @@ public final class PKeyEC extends PKey {
             return ECPointUtil.decodePoint(curve, encoded);
         }
 
-        static ECPoint pointAdd(final EllipticCurve selfCurve, final ECPoint self,
-                                final EllipticCurve otherCurve, final ECPoint other) {
-            final org.bouncycastle.math.ec.ECPoint bcSelf =
-                    EC5Util.convertPoint(EC5Util.convertCurve(selfCurve), self);
-            final org.bouncycastle.math.ec.ECPoint bcOther =
-                    EC5Util.convertPoint(EC5Util.convertCurve(otherCurve), other);
-            final org.bouncycastle.math.ec.ECPoint result = bcSelf.add(bcOther);
-            return result == null ? null : EC5Util.convertPoint(result);
-        }
-
-        static ECPoint pointMul(final EllipticCurve curve, final ECPoint self, final BigInteger bn) {
-            final ECCurve bcCurve = EC5Util.convertCurve(curve);
-            final org.bouncycastle.math.ec.ECPoint bcSelf = EC5Util.convertPoint(bcCurve, self);
-            final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.referenceMultiply(bcSelf, bn);
-            return result == null ? null : EC5Util.convertPoint(result);
-        }
-
-        static ECPoint pointMulTwo(final EllipticCurve selfCurve, final ECPoint self, final BigInteger bn,
-                                   final EllipticCurve genCurve, final ECPoint generator, final BigInteger bn_g) {
-            final ECCurve bcSelfCurve = EC5Util.convertCurve(selfCurve);
-            final org.bouncycastle.math.ec.ECPoint bcSelf = EC5Util.convertPoint(bcSelfCurve, self);
-            final ECCurve bcGenCurve = EC5Util.convertCurve(genCurve);
-            final org.bouncycastle.math.ec.ECPoint bcGen = EC5Util.convertPoint(bcGenCurve, generator);
-            final org.bouncycastle.math.ec.ECPoint result = ECAlgorithms.sumOfTwoMultiplies(bcGen, bn_g, bcSelf, bn);
-            return result == null ? null : EC5Util.convertPoint(result);
-        }
-
-    }
-
-    private static BigInteger getBigInteger(ThreadContext context, IRubyObject arg1) {
-        BigInteger bn;
-        if (arg1 instanceof RubyFixnum) {
-            bn = BigInteger.valueOf(arg1.convertToInteger().getLongValue());
-        } else if (arg1 instanceof RubyBignum) {
-            bn = ((RubyBignum) arg1).getValue();
-        } else if (arg1 instanceof BN) {
-            bn = ((BN) arg1).getValue();
-        } else {
-            Ruby runtime = context.runtime;
-            throw runtime.newTypeError(arg1, runtime.getInteger());
-        }
-        return bn;
     }
 
     static byte[] encode(final ECPublicKey pubKey) {

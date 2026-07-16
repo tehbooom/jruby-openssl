@@ -19,6 +19,17 @@ class TestPKCS5 < TestCase
     assert_equal expected, OpenSSL::PKCS5.pbkdf2_hmac_sha1(pass, '', 16, 24)
   end
 
+  def test_pbkdf2_hmac_sha1_preserves_binary_password_bytes
+    pass = "\xff".b
+    expected_with_salt = ['be90a86901bcd1cc93993c7e3ac52a886544fa0bdf2950b8'].pack('H*')
+    expected_empty_salt = ['bd27c3e3558945b4bc5eb0d89f197efffc96b52be19266d9'].pack('H*')
+
+    assert_equal expected_with_salt,
+                 OpenSSL::PKCS5.pbkdf2_hmac_sha1(pass, 'salt', 42, 24)
+    assert_equal expected_empty_salt,
+                 OpenSSL::PKCS5.pbkdf2_hmac_sha1(pass, '', 42, 24)
+  end
+
   def test_pbkdf2_hmac
     pass = 'SecreT2'
     salt = '0123456789001234567890'

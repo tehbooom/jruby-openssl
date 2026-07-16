@@ -573,6 +573,13 @@ class TestEC < TestCase
     assert_sign_verify_false_or_error { key.verify_raw(nil, malformed_sig, data1) }
   end
 
+  def test_point_arithmetic_is_not_offered
+    point = Fixtures.pkey("p256").public_key
+    assert_equal false, point.respond_to?(:add)
+    assert_equal false, point.respond_to?(:mul)
+    assert_equal false, point.respond_to?(:mul_add)
+  end
+
   # dsa_verify_asn1 with a signature that is not an ASN.1 sequence must raise
   # OpenSSL::PKey::ECError with the exact message "invalid signature (not a sequence)".
   # The sequence check lives in the outer method so the error propagates without being

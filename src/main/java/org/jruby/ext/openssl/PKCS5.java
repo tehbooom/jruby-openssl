@@ -27,7 +27,6 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import javax.crypto.Mac;
 
-
 import org.jruby.Ruby;
 import org.jruby.RubyModule;
 import org.jruby.RubyNumeric;
@@ -35,11 +34,6 @@ import org.jruby.RubyString;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyModule;
 import org.jruby.runtime.builtin.IRubyObject;
-
-import org.bouncycastle.crypto.CipherParameters;
-import org.bouncycastle.crypto.PBEParametersGenerator;
-import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator;
-import org.bouncycastle.crypto.params.KeyParameter;
 
 import static org.jruby.ext.openssl.KDF.newKDFError;
 
@@ -122,18 +116,16 @@ public class PKCS5 {
 
     static RubyString generatePBEKey(final Ruby runtime,
         final char[] pass, final byte[] salt, final int iter, final int keySize) {
-        return StringHelper.newString(runtime, BCInternal.generatePBEKey(pass, salt, iter, keySize));
-    }
-
-    // Lazy-loaded holder for bc-internal PBE classes absent from bc-fips.
-    private static final class BCInternal {
-        private BCInternal() {}
-
-        static byte[] generatePBEKey(final char[] pass, final byte[] salt, final int iter, final int keySize) {
-            PBEParametersGenerator generator = new PKCS5S2ParametersGenerator();
-            generator.init(PBEParametersGenerator.PKCS5PasswordToBytes(pass), salt, iter);
-            CipherParameters params = generator.generateDerivedParameters(keySize * 8);
-            return ((KeyParameter) params).getKey();
+        try {
+            final byte[] passwordBytes = new byte[pass.length];
+            for (int i = 0; i < pass.length; i++) passwordBytes[i] = (byte) pass[i];
+            final Mac mac = SecurityHelper.getMac("HmacSHA1");
+            mac.init(new SimpleSecretKey("HmacSHA1", passwordBytes));
+            final byte[] key = deriveKey(mac, salt, iter, keySize);
+            return StringHelper.newString(runtime, key);
+        }
+        catch (NoSuchAlgorithmException | InvalidKeyException ex) {
+            throw Utils.newRuntimeError(runtime, ex);
         }
     }
 

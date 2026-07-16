@@ -223,17 +223,19 @@ class TestRSA < TestCase
       key.sign_raw("SHA1", "x" * (key.n.num_bytes + 1))
     }
 
-    # RSA-PSS: sign_raw with pss options, verify with both verify and verify_raw
+    # Pre-hashed RSA-PSS is not offered.
     pssopts = {
       "rsa_padding_mode" => "pss",
       "rsa_pss_saltlen"  => 20,
       "rsa_mgf1_md"      => "SHA256"
     }
-    sig_pss = key.sign_raw("SHA256", hash, pssopts)
-    assert_equal true, key.verify("SHA256", sig_pss, data, pssopts)
-    assert_equal true, key.verify_raw("SHA256", sig_pss, hash, pssopts)
-    # PSS signature must not verify as PKCS#1 v1.5
-    assert_equal false, key.verify_raw("SHA256", sig_pss, hash)
+    assert_raise(NotImplementedError) {
+      key.sign_raw("SHA256", hash, pssopts)
+    }
+    sig_pss = key.sign("SHA256", data, pssopts)
+    assert_raise(NotImplementedError) {
+      key.verify_raw("SHA256", sig_pss, hash, pssopts)
+    }
   end
 
   # def test_verify_empty_rsa
@@ -252,16 +254,15 @@ class TestRSA < TestCase
     assert_equal 256, signature.bytesize
     assert_equal true,
                  key.verify_pss("SHA256", signature, data, salt_length: 20, mgf1_hash: "SHA256")
-    assert_equal true,
-                 key.verify_pss("SHA256", signature, data, salt_length: :auto, mgf1_hash: "SHA256")
+    assert_raise(ArgumentError) {
+      key.verify_pss("SHA256", signature, data, salt_length: :auto, mgf1_hash: "SHA256")
+    }
     assert_equal false,
                  key.verify_pss("SHA256", signature, invalid_data, salt_length: 20, mgf1_hash: "SHA256")
 
     signature = key.sign_pss("SHA256", data, salt_length: :digest, mgf1_hash: "SHA256")
     assert_equal true,
                  key.verify_pss("SHA256", signature, data, salt_length: 32, mgf1_hash: "SHA256")
-    assert_equal true,
-                 key.verify_pss("SHA256", signature, data, salt_length: :auto, mgf1_hash: "SHA256")
     assert_equal false,
                  key.verify_pss("SHA256", signature, data, salt_length: 20, mgf1_hash: "SHA256")
 
@@ -279,8 +280,6 @@ class TestRSA < TestCase
       # https://datatracker.ietf.org/doc/html/rfc8017#section-9.1.1
       assert_equal true,
                    key.verify_pss("SHA256", signature, data, salt_length: 222, mgf1_hash: "SHA256")
-      assert_equal true,
-                   key.verify_pss("SHA256", signature, data, salt_length: :auto, mgf1_hash: "SHA256")
     end
 
     assert_pkey_error {
@@ -288,13 +287,38 @@ class TestRSA < TestCase
     }
   end
 
-  # Regression test: verify_pss with salt_length: :auto must handle RSA raw
-  # output shorter than emLen (leading zero bytes stripped by BigInteger).
-  # The hardcoded signature below was produced by sign_pss with the rsa2048
-  # fixture key and salt_length: :digest; its RSA public-key recovery yields
-  # an encoded message (EM) with a leading 0x00 byte (255 bytes instead of
-  # the expected emLen=256), which triggers the leading-zero edge case.
-  def test_sign_verify_pss_auto_salt_leading_zero
+  def test_sign_pss_with_distinct_hashes_does_not_fallback_to_another_provider
+    key = Fixtures.pkey("rsa2048")
+    data = "PSS with SHA-256 content and SHA-384 MGF1"
+
+    assert_raise_with_message(
+      OpenSSL::PKey::RSAError,
+      "RSA-PSS with different content and MGF1 digests is unsupported by the configured provider"
+    ) {
+      key.sign_pss("SHA256", data, salt_length: 20, mgf1_hash: "SHA384")
+    }
+
+    parameters = java.security.spec.PSSParameterSpec.new(
+      "SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec::SHA384, 20, 1
+    )
+    signer = java.security.Signature.getInstance("RSASSA-PSS", "SunRsaSign")
+    signer.setParameter(parameters)
+    signer.initSign(key.to_java(java.security.PrivateKey))
+    signer.update(data.to_java_bytes)
+    signature = signer.sign
+
+    assert_raise_with_message(
+      OpenSSL::PKey::RSAError,
+      "RSA-PSS with different content and MGF1 digests is unsupported by the configured provider"
+    ) {
+      key.verify_pss("SHA256", String.from_java_bytes(signature), data,
+                     salt_length: 20, mgf1_hash: "SHA384")
+    }
+  end
+
+  # Regression test: the encoded message recovered from this signature begins
+  # with 0x00. Keep explicit-salt verification coverage after dropping :auto.
+  def test_verify_pss_explicit_salt_leading_zero
     key = Fixtures.pkey("rsa2048")
     data = "test-data-6"
     signature = Base64.decode64(
@@ -305,10 +329,9 @@ class TestRSA < TestCase
       "fTdQlsbiyuMvTnbNqIlwVNh4FU2AZr9u4DHd3zQt6csYI2UPcE00vv3e0RWY4C4EA" \
       "TGVk92gZ59VEVeJEQ=="
     )
+
     assert_equal true,
                  key.verify_pss("SHA256", signature, data, salt_length: 32, mgf1_hash: "SHA256")
-    assert_equal true,
-                 key.verify_pss("SHA256", signature, data, salt_length: :auto, mgf1_hash: "SHA256")
   end
 
   def test_rsa_param_accessors
