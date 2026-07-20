@@ -985,10 +985,19 @@ public class ASN1 {
         }
     }
 
-    private static DERTaggedObject newTaggedObject(final boolean explicit, final int tagClass,
+    private static ASN1Encodable newTaggedObject(final boolean explicit, final int tagClass,
             final int tag, final ASN1Encodable value) {
         if (tagClass == BERTags.CONTEXT_SPECIFIC) {
             return new DERTaggedObject(explicit, tag, value);
+        }
+        if (tagClass == BERTags.APPLICATION) {
+            if (explicit) {
+                final ASN1Encodable application = applicationTaggedObject(true, tag, value);
+                if (application != null) {
+                    return application;
+                }
+            }
+            return new TagClassEncodable(tagClass, explicit, tag, value);
         }
         try {
             return DERTaggedObject.class
@@ -996,7 +1005,288 @@ public class ASN1 {
                     .newInstance(explicit, tagClass, tag, value);
         }
         catch (ReflectiveOperationException e) {
-            throw new IllegalArgumentException("tag class is unsupported by this ASN.1 provider", e);
+            return new TagClassEncodable(tagClass, explicit, tag, value);
+        }
+    }
+
+    private static ASN1Encodable applicationTaggedObject(final boolean explicit, final int tag,
+            final ASN1Encodable value) {
+        try {
+            final Class<?> cls = Class.forName("org.bouncycastle.asn1.DERApplicationSpecific");
+            if (explicit) {
+                return (ASN1Encodable) cls.getConstructor(boolean.class, int.class, ASN1Encodable.class)
+                        .newInstance(true, tag, value);
+            }
+            return (ASN1Encodable) cls.getConstructor(int.class, ASN1Encodable.class)
+                    .newInstance(tag, value);
+        }
+        catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
+    private static boolean isApplicationSpecific(final ASN1Encodable obj) {
+        for (Class<?> type = obj.getClass(); type != null; type = type.getSuperclass()) {
+            if ("ASN1ApplicationSpecific".equals(type.getSimpleName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static ASN1Encodable explicitTaggedPayload(final ASN1TaggedObject taggedObj) {
+        try {
+            final java.lang.reflect.Method getObject =
+                    ASN1TaggedObject.class.getMethod("getObject");
+            return (ASN1Encodable) getObject.invoke(taggedObj);
+        }
+        catch (NoSuchMethodException e) {
+            try {
+                return (ASN1Encodable) ASN1TaggedObject.class
+                        .getMethod("getExplicitBaseObject").invoke(taggedObj);
+            }
+            catch (ReflectiveOperationException ex) {
+                return taggedObj.getLoadedObject();
+            }
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    private static RubyArray decodeConstructedApplicationContents(final ThreadContext context,
+            final RubyModule ASN1, final byte[] contents) throws IOException {
+        final RubyArray valArr = context.runtime.newArray();
+        int offset = 0;
+        while (offset < contents.length) {
+            if (SecurityHelper.isRequiredProviderMode() && (contents[offset] & 0xC0) != BERTags.UNIVERSAL) {
+                final ParsedTLV tlv = parseTLV(contents, offset);
+                valArr.append(decodeNonUniversalTLV(context, ASN1, contents, tlv));
+                offset += tlv.totalLength;
+            } else {
+                final int start = offset;
+                final ParsedTLV inner = parseTLV(contents, offset);
+                valArr.append(decodeObject(context, ASN1,
+                        ASN1Primitive.fromByteArray(java.util.Arrays.copyOfRange(contents, start, start + inner.totalLength))));
+                offset += inner.totalLength;
+            }
+        }
+        return valArr;
+    }
+
+    private static final class ParsedTLV {
+        private final int totalLength;
+        private final int tagClass;
+        private final int tagNo;
+        private final boolean constructed;
+        private final boolean indefiniteLength;
+        private final int contentOffset;
+        private final int contentLength;
+
+        private ParsedTLV(final int totalLength, final int tagClass, final int tagNo,
+                final boolean constructed, final boolean indefiniteLength,
+                final int contentOffset, final int contentLength) {
+            this.totalLength = totalLength;
+            this.tagClass = tagClass;
+            this.tagNo = tagNo;
+            this.constructed = constructed;
+            this.indefiniteLength = indefiniteLength;
+            this.contentOffset = contentOffset;
+            this.contentLength = contentLength;
+        }
+    }
+
+    private static ParsedTLV parseTLV(final byte[] asn1, int offset) throws IOException {
+        final int start = offset;
+        final int identifier = asn1[offset++] & 0xFF;
+        final int tagClass = identifier & 0xC0;
+        final boolean constructed = (identifier & BERTags.CONSTRUCTED) != 0;
+        int tagNo = identifier & 0x1F;
+        if (tagNo == 0x1F) {
+            if (offset >= asn1.length) throw new IOException("EOF found inside tag value.");
+            int b = asn1[offset++] & 0xFF;
+            if ((b & 0x7F) == 0) throw new IOException("corrupted stream - invalid high tag number found");
+            tagNo = 0;
+            while ((b & 0x80) != 0) {
+                tagNo |= (b & 0x7F);
+                tagNo <<= 7;
+                if (offset >= asn1.length) throw new IOException("EOF found inside tag value.");
+                b = asn1[offset++] & 0xFF;
+            }
+            tagNo |= (b & 0x7F);
+        }
+        if (offset >= asn1.length) throw new IOException("header too short");
+        final int lengthByte = asn1[offset++] & 0xFF;
+        if (lengthByte == 0x80) {
+            if (!constructed) throw new IOException("indefinite length on primitive");
+            final int contentOffset = offset;
+            final int end = skipIndefiniteContent(asn1, contentOffset);
+            return new ParsedTLV(end - start, tagClass, tagNo, true, true, contentOffset, end - contentOffset - 2);
+        }
+        int contentLength;
+        if (lengthByte > 0x80) {
+            final int numLengthBytes = lengthByte & 0x7F;
+            if (offset + numLengthBytes > asn1.length) throw new IOException("header too short");
+            contentLength = 0;
+            for (int i = 0; i < numLengthBytes; i++) {
+                contentLength = (contentLength << 8) | (asn1[offset++] & 0xFF);
+            }
+        } else {
+            contentLength = lengthByte;
+        }
+        if (offset + contentLength > asn1.length) {
+            throw new IOException("corrupted stream - out of bounds length found");
+        }
+        return new ParsedTLV(offset + contentLength - start, tagClass, tagNo, constructed, false, offset, contentLength);
+    }
+
+    private static int skipIndefiniteContent(final byte[] asn1, int offset) throws IOException {
+        while (offset < asn1.length) {
+            if (offset + 1 < asn1.length && asn1[offset] == 0x00 && asn1[offset + 1] == 0x00) {
+                return offset + 2;
+            }
+            final ParsedTLV inner = parseTLV(asn1, offset);
+            offset += inner.totalLength;
+        }
+        throw new IOException("missing EOC");
+    }
+
+    private static IRubyObject decodeNonUniversalTLV(final ThreadContext context, final RubyModule ASN1,
+            final byte[] asn1, final ParsedTLV tlv) throws IOException {
+        final Ruby runtime = context.runtime;
+        final IRubyObject tag = runtime.newFixnum(tlv.tagNo);
+        final IRubyObject tag_class = tagClassSymbol(runtime, tlv.tagClass);
+        if (tlv.constructed) {
+            final RubyArray valArr = runtime.newArray();
+            int offset = tlv.contentOffset;
+            final int end = tlv.indefiniteLength ?
+                    tlv.contentOffset + tlv.contentLength : tlv.contentOffset + tlv.contentLength;
+            while (offset < end) {
+                if (tlv.indefiniteLength && offset + 1 < asn1.length &&
+                        asn1[offset] == 0x00 && asn1[offset + 1] == 0x00) {
+                    break;
+                }
+                if ((asn1[offset] & 0xC0) != BERTags.UNIVERSAL) {
+                    final ParsedTLV inner = parseTLV(asn1, offset);
+                    valArr.append(decodeNonUniversalTLV(context, ASN1, asn1, inner));
+                    offset += inner.totalLength;
+                } else {
+                    final ParsedTLV inner = parseTLV(asn1, offset);
+                    final byte[] encoded = java.util.Arrays.copyOfRange(asn1, offset, offset + inner.totalLength);
+                    valArr.append(decodeObject(context, ASN1, ASN1Primitive.fromByteArray(encoded)));
+                    offset += inner.totalLength;
+                }
+            }
+            if (tlv.indefiniteLength) {
+                return ASN1Data.newInfiniteLength(context, valArr, tlv.tagNo, tag_class);
+            }
+            return ASN1.getClass("ASN1Data").newInstance(context,
+                    new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+        }
+        final byte[] content = java.util.Arrays.copyOfRange(asn1, tlv.contentOffset, tlv.contentOffset + tlv.contentLength);
+        final RubyString val = runtime.newString(new ByteList(content, false));
+        return ASN1.getClass("ASN1Data").newInstance(context,
+                new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
+    }
+
+    private static void writeDERIdentifier(final int tag, final int flags,
+            final java.io.ByteArrayOutputStream out) {
+        if (tag > 0x1f) {
+            final byte[] stack = new byte[6];
+            int pos = stack.length;
+
+            stack[--pos] = (byte) (tag & 0x7F);
+            int tmpTag = tag;
+            while (tmpTag > 127) {
+                tmpTag >>>= 7;
+                stack[--pos] = (byte) (tmpTag & 0x7F | 0x80);
+            }
+
+            stack[--pos] = (byte) (flags | 0x1F);
+            out.write(stack, pos, stack.length - pos);
+        } else {
+            out.write(flags | tag);
+        }
+    }
+
+    private static void writeDERLength(final int length, final java.io.ByteArrayOutputStream out) {
+        if (length < 0x80) {
+            out.write(length);
+            return;
+        }
+        final byte[] stack = new byte[5];
+        int pos = stack.length;
+        int tmpLength = length;
+        do {
+            stack[--pos] = (byte) (tmpLength & 0xFF);
+            tmpLength >>>= 8;
+        } while (tmpLength != 0);
+        out.write(0x80 | (stack.length - pos));
+        out.write(stack, pos, stack.length - pos);
+    }
+
+    private static final class RawDerEncodable implements ASN1Encodable {
+        private final byte[] encoded;
+
+        private RawDerEncodable(final byte[] encoded) {
+            this.encoded = encoded;
+        }
+
+        @Override
+        public ASN1Primitive toASN1Primitive() {
+            try {
+                return (ASN1Primitive) ASN1Primitive.fromByteArray(encoded);
+            }
+            catch (IOException ex) {
+                throw new IllegalArgumentException(ex);
+            }
+        }
+    }
+
+    private static final class TagClassEncodable implements ASN1Encodable {
+        private final int tagClass;
+        private final boolean explicit;
+        private final int tag;
+        private final ASN1Encodable value;
+
+        private TagClassEncodable(final int tagClass, final boolean explicit, final int tag,
+                final ASN1Encodable value) {
+            this.tagClass = tagClass;
+            this.explicit = explicit;
+            this.tag = tag;
+            this.value = value;
+        }
+
+        @Override
+        public ASN1Primitive toASN1Primitive() {
+            try {
+                final byte[] inner = value.toASN1Primitive().getEncoded(ASN1Encoding.DER);
+                if (explicit) {
+                    final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(inner.length + 4);
+                    writeDERIdentifier(tag, tagClass | BERTags.CONSTRUCTED, out);
+                    writeDERLength(inner.length, out);
+                    out.write(inner);
+                    return (ASN1Primitive) ASN1Primitive.fromByteArray(out.toByteArray());
+                }
+                if (inner.length == 0) {
+                    final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(2);
+                    writeDERIdentifier(tag, tagClass, out);
+                    writeDERLength(0, out);
+                    return (ASN1Primitive) ASN1Primitive.fromByteArray(out.toByteArray());
+                }
+                final byte[] retagged = inner.clone();
+                final boolean constructed = (inner[0] & BERTags.CONSTRUCTED) != 0;
+                final java.io.ByteArrayOutputStream tagOut = new java.io.ByteArrayOutputStream(4);
+                writeDERIdentifier(tag, tagClass | (constructed ? BERTags.CONSTRUCTED : 0), tagOut);
+                final byte[] tagBytes = tagOut.toByteArray();
+                final byte[] encoded = new byte[tagBytes.length + inner.length - 1];
+                System.arraycopy(tagBytes, 0, encoded, 0, tagBytes.length);
+                System.arraycopy(inner, 1, encoded, tagBytes.length, inner.length - 1);
+                return (ASN1Primitive) ASN1Primitive.fromByteArray(encoded);
+            }
+            catch (IOException ex) {
+                throw new IllegalArgumentException(ex);
+            }
         }
     }
 
@@ -1111,6 +1401,27 @@ public class ASN1 {
             return ASN1.getClass("ObjectId").newInstance(context, runtime.newString(objId), Block.NULL_BLOCK);
         }
 
+        if (obj instanceof ASN1Encodable && isApplicationSpecific((ASN1Encodable) obj)) {
+            try {
+                final int tagNo = (Integer) obj.getClass().getMethod("getApplicationTag").invoke(obj);
+                final boolean constructed = (Boolean) obj.getClass().getMethod("isConstructed").invoke(obj);
+                final byte[] contents = (byte[]) obj.getClass().getMethod("getContents").invoke(obj);
+                final IRubyObject tag = runtime.newFixnum(tagNo);
+                final IRubyObject tag_class = runtime.newSymbol("APPLICATION");
+                if (constructed) {
+                    final RubyArray valArr = decodeConstructedApplicationContents(context, ASN1, contents);
+                    return ASN1.getClass("ASN1Data").newInstance(context,
+                            new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+                }
+                final RubyString val = runtime.newString(new ByteList(contents, false));
+                return ASN1.getClass("ASN1Data").newInstance(context,
+                        new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
+            }
+            catch (ReflectiveOperationException e) {
+                throw new IllegalArgumentException("cannot decode application-specific ASN.1 object", e);
+            }
+        }
+
         if (obj instanceof ASN1TaggedObject) {
             final ASN1TaggedObject taggedObj = (ASN1TaggedObject) obj;
             final IRubyObject tag = runtime.newFixnum(taggedObj.getTagNo());
@@ -1147,19 +1458,22 @@ public class ASN1 {
 
             try {
                 if ( taggedObj.isExplicit() ) {
-                    final ASN1Sequence sequence = ASN1Sequence.getInstance(taggedObj, true);
-                    @SuppressWarnings("unchecked")
-                    final RubyArray inner = decodeObjects(context, ASN1, sequence.getObjects());
-                    @SuppressWarnings("unchecked")
+                    final IRubyObject decoded = decodeObject(context, ASN1, explicitTaggedPayload(taggedObj));
                     final RubyArray valArr = context.runtime.newArray();
-                    valArr.append(ASN1.getClass("Sequence").newInstance(context, inner, Block.NULL_BLOCK));
-                    return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+                    valArr.append(decoded);
+                    return ASN1.getClass("ASN1Data").newInstance(context,
+                            new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
                 }
-                IRubyObject decoded = decodeObject(context, ASN1, taggedObjectInner(taggedObj));
-                IRubyObject innerValue = decoded.callMethod(context, "value");
-                IRubyObject val = innerValue instanceof RubyString || innerValue instanceof RubyArray ?
-                        innerValue : decoded;
-                return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
+                if ((taggedObjectTagClass(taggedObj) & BERTags.CONSTRUCTED) != 0) {
+                    final ASN1Sequence sequence = ASN1Sequence.getInstance(taggedObj, false);
+                    final RubyArray valArr = decodeObjects(context, ASN1, sequence.getObjects());
+                    return ASN1.getClass("ASN1Data").newInstance(context,
+                            new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+                }
+                final IRubyObject val = decodeObject(context, ASN1, taggedObjectInner(taggedObj))
+                        .callMethod(context, "value");
+                return ASN1.getClass("ASN1Data").newInstance(context,
+                        new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
             } catch (IllegalStateException | IllegalArgumentException e) {
                 IRubyObject decoded = decodeObject(context, ASN1, taggedObjectInner(taggedObj));
                 IRubyObject innerValue = decoded.callMethod(context, "value");
@@ -1256,6 +1570,13 @@ public class ASN1 {
         final byte[] asn1 = in.bytes();
         int offset = in.offset();
         final int tag = asn1[offset] & 0xFF;
+
+        if (SecurityHelper.isRequiredProviderMode() && (tag & 0xC0) != BERTags.UNIVERSAL) {
+            final ParsedTLV tlv = parseTLV(asn1, offset);
+            final IRubyObject decoded = decodeNonUniversalTLV(context, ASN1, asn1, tlv);
+            in.skip(tlv.totalLength);
+            return decoded;
+        }
 
         if ( ( tag & BERTags.CONSTRUCTED ) == 0 ) {
             return decodeObject(context, ASN1, readObject(in));
@@ -1640,7 +1961,7 @@ public class ASN1 {
             return toASN1TaggedObject(context);
         }
 
-        final ASN1TaggedObject toASN1TaggedObject(final ThreadContext context) {
+        final ASN1Encodable toASN1TaggedObject(final ThreadContext context) {
             final int tag = getTag(context);
             final int tagClass = getTagClass(context);
 
@@ -1682,8 +2003,12 @@ public class ASN1 {
                 }
                 final IRubyObject string = value.checkStringType();
                 if (string instanceof RubyString) {
-                    return newTaggedObject(isExplicitTagging(), tagClass, tag,
-                            new DERGeneralString(string.asJavaString()));
+                    try {
+                        return new RawDerEncodable(toDERInternal(context, false, false, string));
+                    }
+                    catch (IOException ex) {
+                        throw newASN1Error(context.runtime, ex.getMessage());
+                    }
                 } else {
                     throw context.runtime.newTypeError(
                             "no implicit conversion of " + value.getMetaClass().getBaseName() + " into String");
@@ -1706,10 +2031,14 @@ public class ASN1 {
         }
 
         byte[] toDER(final ThreadContext context) throws IOException {
-            if (
-                ("ASN1Data".equals(getClassBaseName()) && isUniversal(context))
-            ) {
-                    return toDERInternal(context, isConstructive(), isInfiniteLength(), value(context));
+            if ("ASN1Data".equals(getClassBaseName())) {
+                final IRubyObject value = value(context);
+                if (!(value instanceof RubyArray)) {
+                    return toDERInternal(context, isConstructive(), isInfiniteLength(), value);
+                }
+                if (isInfiniteLength()) {
+                    return toDERInternal(context, true, true, value);
+                }
             }
 
             final ASN1Primitive prim = toASN1(context).toASN1Primitive();
@@ -1842,10 +2171,10 @@ public class ASN1 {
                 }
                 while (length != 0);
 
-                int count = stack.length - pos;
+                final int count = stack.length - pos;
                 stack[--pos] = (byte)(0x80 | count);
 
-                out.write(stack, pos, count - pos);
+                out.write(stack, pos, stack.length - pos);
             }
         }
 

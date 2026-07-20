@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -148,17 +149,85 @@ public class Group4BehaviorTest {
     }
 
     @Test
-    void desEdeCfbUsesNoPaddingSemanticsThroughRubyApi() {
+    void desEdeCfbUsesNoPaddingSemanticsThroughRubyApi() throws Exception {
         final Ruby runtime = Ruby.newInstance();
         try {
             OpenSSL.createOpenSSL(runtime);
-            final String realName = runtime.evalScriptlet(
+            final String result = runtime.evalScriptlet(
                     "c = OpenSSL::Cipher.new('DES-EDE-CFB')\n" +
-                    "c.send(:initialize, 'DES-EDE-CFB') rescue nil\n" +
-                    "c.name"
+                    "[c.name, c.key_len, c.iv_len].join(':')"
             ).toString();
-            assertEquals("DES-EDE-CFB", realName);
+            assertEquals("DES-EDE-CFB:16:8", result);
             assertFalse(Cipher.Algorithm.getRealName("DES-EDE-CFB").contains("PKCS5Padding"));
+            assertEquals("BCFIPS",
+                    SecurityHelper.getCipher("DESede/CFB/NoPadding").getProvider().getName());
+        }
+        finally {
+            runtime.tearDown(false);
+        }
+    }
+
+    @Test
+    void twoKeyTdeaEncryptionRejectedUnderFipsThroughRubyApi() {
+        final Ruby runtime = Ruby.newInstance();
+        try {
+            OpenSSL.createOpenSSL(runtime);
+            final RaiseException error = assertThrows(RaiseException.class, () ->
+                    runtime.evalScriptlet(
+                            "c = OpenSSL::Cipher.new('DES-EDE-CFB')\n" +
+                            "c.encrypt\n" +
+                            "c.key = \"\\0\" * 16\n" +
+                            "c.iv = \"\\0\" * 8\n" +
+                            "c.update('JPMNT')"
+                    ));
+            assertTrue(error.getMessage().contains("two-key TDEA encryption is disallowed"),
+                    "unexpected: " + error.getMessage());
+        }
+        finally {
+            runtime.tearDown(false);
+        }
+    }
+
+    @Test
+    void twoKeyTdeaDecryptionAllowedUnderFipsThroughRubyApi() {
+        final Ruby runtime = Ruby.newInstance();
+        try {
+            OpenSSL.createOpenSSL(runtime);
+            // Legacy decrypt path: ciphertext from non-FIPS BC (MRI-compatible vector).
+            final String plaintext = runtime.evalScriptlet(
+                    "key = \"\\0\\0\\0\\0\\0\\0\\0\\0\" * 3\n" +
+                    "iv = \"\\0\\0\\0\\0\\0\\0\\0\\0\"\n" +
+                    "c = OpenSSL::Cipher.new('DES-EDE-CFB')\n" +
+                    "c.decrypt\n" +
+                    "c.key = key\n" +
+                    "c.iv = iv\n" +
+                    "c.pkcs5_keyivgen(key, iv)\n" +
+                    "ct = \"l\\x02?\\x16\\x1A\"\n" +
+                    "c.update(ct) + c.final"
+            ).toString();
+            assertEquals("JPMNT", plaintext);
+        }
+        finally {
+            runtime.tearDown(false);
+        }
+    }
+
+    @Test
+    void threeKeyTdeaEncryptionAllowedByProviderUnderFipsThroughRubyApi() {
+        final Ruby runtime = Ruby.newInstance();
+        try {
+            OpenSSL.createOpenSSL(runtime);
+            final String ciphertext = runtime.evalScriptlet(
+                    "key = \"\\x1F\\xFF&\\xA4k\\x8F^\\xC80\\txq'S\\x93\\xD2\\xE3A\\xEDT\\xDCs\\xFD<=G\\a\\x8F=\\x8FhE\"\n" +
+                    "iv = \"\\0\" * 8\n" +
+                    "c = OpenSSL::Cipher.new('DES-EDE3-CFB')\n" +
+                    "c.encrypt\n" +
+                    "c.key = key\n" +
+                    "c.iv = iv\n" +
+                    "(c.update('JPMNT') + c.final).unpack1('H*')"
+            ).toString();
+            assertEquals("1b6dcd5321", ciphertext,
+                    "24-byte three-key TDEA encryption remains provider-allowed under FIPS");
         }
         finally {
             runtime.tearDown(false);

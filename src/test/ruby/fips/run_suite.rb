@@ -39,6 +39,15 @@ def fips_emit_summary(summary)
   puts "FIPS_RUBY_RESULT:#{summary.to_json}"
 end
 
+def fips_categorize_omission(message)
+  return :known_drop if defined?(FipsTestSkips) && FipsTestSkips.known_drop?(message)
+  return :hybrid if defined?(FipsTestSkips) && FipsTestSkips.hybrid?(message)
+  return :artifact if defined?(FipsTestSkips) && FipsTestSkips.artifact?(message)
+  return :native if defined?(FipsTestSkips) && FipsTestSkips.native?(message)
+
+  :unexpected
+end
+
 root = File.expand_path('../../../..', __dir__)
 suite_name = ENV.fetch('FIPS_RUBY_SUITE')
 files = ENV.fetch('FIPS_RUBY_FILES', '').split(File::PATH_SEPARATOR).reject(&:empty?)
@@ -66,6 +75,12 @@ rescue Exception => e
 end
 loaded_classes.uniq!
 
+loaded_test_keys = loaded_classes.flat_map do |klass|
+  klass.instance_methods(false).grep(/\Atest_/) do |method|
+    "#{klass.name}##{method}"
+  end
+end.uniq
+
 if loaded_classes.empty?
   fips_emit_summary(fips_error_summary(suite_name, 'no Test::Unit::TestCase subclasses loaded'))
   return
@@ -89,36 +104,68 @@ omissions = if result.respond_to?(:omissions)
             end
 
 known_drop_skips = []
+hybrid_skips = []
 artifact_skips = []
 native_omissions = []
+unexpected_omissions = []
 omissions.each do |o|
   entry = fips_json_string("#{o.message} [#{o.test_name}]")
-  if defined?(FipsTestSkips) && FipsTestSkips.known_drop?(o.message)
+  case fips_categorize_omission(o.message)
+  when :known_drop
     known_drop_skips << entry
-  elsif defined?(FipsTestSkips) && FipsTestSkips.artifact?(o.message)
+  when :hybrid
+    hybrid_skips << entry
+  when :artifact
     artifact_skips << entry
-  else
+  when :native
     native_omissions << entry
+  else
+    unexpected_omissions << entry
   end
 end
 
-skipped = omissions.size
 failures = result.failures.map { |f| fips_json_string(f) }
 errors = result.errors.map { |e| fips_json_string(e) }
+enforcement_failures = []
+
+if defined?(FipsTestSkips)
+  begin
+    FipsTestSkips.run_native_probes!(native_omissions)
+    FipsTestSkips.audit_harness_results!(
+      known_drop: known_drop_skips,
+      hybrid: hybrid_skips,
+      artifact: artifact_skips,
+      native: native_omissions,
+      loaded_test_keys: loaded_test_keys
+    )
+  rescue Exception => e
+    enforcement_failures << fips_json_string("FIPS skip enforcement: #{e.class}: #{e.message}")
+  end
+end
+
+unless unexpected_omissions.empty?
+  enforcement_failures << fips_json_string(
+    "unexpected FIPS omissions: #{unexpected_omissions.join('; ')}"
+  )
+end
+
+all_failures = failures + errors + enforcement_failures
+failure_count = result.failure_count + result.error_count + enforcement_failures.size
+reported_known_drop_skips = known_drop_skips + hybrid_skips
 
 summary = {
   'suite' => suite_name,
   'ran' => result.run_count,
-  'passed' => result.run_count - result.failure_count - result.error_count - skipped,
-  'failed' => result.failure_count + result.error_count,
-  'skipped' => skipped,
-  'known_drop_skips_count' => known_drop_skips.size,
+  'passed' => result.run_count - failure_count - omissions.size,
+  'failed' => failure_count,
+  'skipped' => omissions.size,
+  'known_drop_skips_count' => reported_known_drop_skips.size,
   'artifact_skips_count' => artifact_skips.size,
   'native_omissions_count' => native_omissions.size,
   'assertions' => result.assertion_count,
-  'failure_count' => result.failure_count + result.error_count,
-  'failures' => (failures + errors).join("\n"),
-  'known_drop_skips' => known_drop_skips.join("\n"),
+  'failure_count' => failure_count,
+  'failures' => all_failures.join("\n"),
+  'known_drop_skips' => reported_known_drop_skips.join("\n"),
   'artifact_skips' => artifact_skips.join("\n"),
   'native_omissions' => native_omissions.join("\n"),
   'harness_findings' => $fips_harness_findings.map { |f| fips_json_string(f) }.join("\n"),

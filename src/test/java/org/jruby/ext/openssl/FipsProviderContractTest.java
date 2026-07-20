@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import java.io.BufferedReader;
 import java.io.FileInputStream;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.lang.reflect.Field;
 import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
@@ -28,16 +31,25 @@ import java.security.spec.MGF1ParameterSpec;
 import java.security.spec.PSSParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Collections;
+import java.util.Base64;
 import java.util.IdentityHashMap;
 import java.util.Set;
 
 import javax.crypto.KeyAgreement;
+import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.SSLContext;
 
+import org.bouncycastle.asn1.ASN1InputStream;
+import org.bouncycastle.asn1.ASN1Sequence;
+import org.bouncycastle.asn1.ASN1TaggedObject;
 import org.bouncycastle.operator.ContentSigner;
 import org.jruby.Ruby;
+import org.jruby.ext.openssl.x509store.PEMInputOutput;
+import org.jruby.ext.openssl.x509store.X509AuxCertificate;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -245,6 +257,46 @@ public class FipsProviderContractTest {
 
         assertConfigured("CRL Signature", SecurityHelper.getSignature(crl.getSigAlgName()).getProvider());
         assertEquals(true, SecurityHelper.verify(crl, issuer.getPublicKey()));
+        assertTrustedCertificateAuxTaggedSequencesUnwrapAndRoundTrip();
+    }
+
+    private void assertTrustedCertificateAuxTaggedSequencesUnwrapAndRoundTrip() throws Exception {
+        final byte[] taggedBytes = new byte[] {
+                (byte) 0xa0, 0x06, 0x30, 0x04, 0x06, 0x02, 0x2a, 0x03
+        };
+        try (ASN1InputStream input = new ASN1InputStream(taggedBytes)) {
+            final ASN1TaggedObject tagged = (ASN1TaggedObject) input.readObject();
+            assertTrue(tagged.getLoadedObject() instanceof ASN1TaggedObject,
+                    "bc-fips getLoadedObject preserves the tagged wrapper");
+            assertTrue(ASN1Sequence.getInstance(tagged, true) instanceof ASN1Sequence,
+                    "explicit tagged-object access must unwrap the inner aux sequence");
+        }
+
+        final X509Certificate certificate;
+        try (FileInputStream input = new FileInputStream("src/test/ruby/x509/ec-ca.crt")) {
+            certificate = (X509Certificate)
+                    SecurityHelper.getCertificateFactory("X.509").generateCertificate(input);
+        }
+
+        final byte[] auxBytes = new byte[] {
+                0x30, 0x10,
+                (byte) 0xa0, 0x06, 0x30, 0x04, 0x06, 0x02, 0x2a, 0x03,
+                (byte) 0xa1, 0x06, 0x30, 0x04, 0x06, 0x02, 0x2a, 0x04
+        };
+        final byte[] trustedBytes = new byte[certificate.getEncoded().length + auxBytes.length];
+        System.arraycopy(certificate.getEncoded(), 0, trustedBytes, 0, certificate.getEncoded().length);
+        System.arraycopy(auxBytes, 0, trustedBytes, certificate.getEncoded().length, auxBytes.length);
+        final String trustedPem = "-----BEGIN TRUSTED CERTIFICATE-----\n" +
+                Base64.getMimeEncoder(64, new byte[] { '\n' }).encodeToString(trustedBytes) +
+                "\n-----END TRUSTED CERTIFICATE-----\n";
+
+        final X509AuxCertificate parsed = PEMInputOutput.readX509Aux(
+                new BufferedReader(new StringReader(trustedPem)), null);
+        assertNotNull(parsed);
+        final StringWriter encoded = new StringWriter();
+        PEMInputOutput.writeX509Aux(encoded, parsed);
+        assertNotNull(PEMInputOutput.readX509Aux(
+                new BufferedReader(new StringReader(encoded.toString())), null));
     }
 
     @Test
@@ -471,6 +523,34 @@ public class FipsProviderContractTest {
             assertConfigured(algorithm + " MessageDigest", digest.getProvider());
             assertNotNull(digest.digest("provider contract".getBytes("UTF-8")));
         }
+        assertHybridProviderAllowsAlgorithmsRestrictedByLogstashCore();
+    }
+
+    private void assertHybridProviderAllowsAlgorithmsRestrictedByLogstashCore() throws Exception {
+        final KeyPairGenerator generator = SecurityHelper.getKeyPairGenerator("RSA");
+        generator.initialize(2048, SecurityHelper.getSecureRandom());
+        final KeyPair pair = generator.generateKeyPair();
+
+        final Signature signature = SecurityHelper.getSignature("MD5withRSA");
+        assertConfigured("MD5withRSA Signature", signature.getProvider());
+        signature.initSign(pair.getPrivate());
+        signature.update("hybrid mode".getBytes("UTF-8"));
+        assertTrue(signature.sign().length > 0);
+
+        final MessageDigest digest = SecurityHelper.getMessageDigest("MD5");
+        assertConfigured("MD5 MessageDigest", digest.getProvider());
+        assertEquals(16, digest.digest("hybrid mode".getBytes("UTF-8")).length);
+
+        final Cipher cipher = SecurityHelper.getCipher("RC2/CBC/PKCS5Padding");
+        assertConfigured("RC2/CBC Cipher", cipher.getProvider());
+        cipher.init(Cipher.ENCRYPT_MODE,
+                new SecretKeySpec(new byte[16], "RC2"), SecurityHelper.getSecureRandom());
+        assertTrue(cipher.doFinal("hybrid mode".getBytes("UTF-8")).length > 0);
+
+        final Mac mac = SecurityHelper.getMac("HmacMD5");
+        assertConfigured("HmacMD5 Mac", mac.getProvider());
+        mac.init(new SecretKeySpec(new byte[16], "HmacMD5"));
+        assertEquals(16, mac.doFinal("hybrid mode".getBytes("UTF-8")).length);
     }
 
     @Test

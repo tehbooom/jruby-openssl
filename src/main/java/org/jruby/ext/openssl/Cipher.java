@@ -1114,6 +1114,7 @@ public class Cipher extends RubyObject {
         if ( key == null ) { //key = emptyKey(keyLength);
             throw newCipherError(runtime, "key not specified");
         }
+        rejectTwoKeyTdeaEncryptionUnderFips(runtime);
         try {
             // ECB mode is the only mode that does not require an IV
             if ( "ECB".equalsIgnoreCase(cryptoMode) ) {
@@ -1165,6 +1166,26 @@ public class Cipher extends RubyObject {
     private String getCipherAlgorithm() {
         final int idx = realName.indexOf('/');
         return idx <= 0 ? realName : realName.substring(0, idx);
+    }
+
+    /**
+     * NIST SP 800-131A Rev.2 disallows two-key TDEA encryption. Legacy decryption
+     * may still be performed when the configured provider allows it; three-key TDEA
+     * (24-byte key, OpenSSL DES-EDE3*) is left to provider policy.
+     */
+    private void rejectTwoKeyTdeaEncryptionUnderFips(final Ruby runtime) {
+        if ( ! SecurityHelper.isRequiredProviderMode() ) return;
+        if ( ! encryptMode ) return;
+        if ( ! isTwoKeyTdea() ) return;
+        throw newCipherError(runtime,
+                "two-key TDEA encryption is disallowed under FIPS required-provider mode " +
+                "(NIST SP 800-131A Rev.2)");
+    }
+
+    private boolean isTwoKeyTdea() {
+        if ( ! "DESede".equals(getCipherAlgorithm()) ) return false;
+        if ( "EDE".equalsIgnoreCase(cryptoVersion) ) return true;
+        return key != null && key.length == 16;
     }
 
     private int processedDataBytes = 0;

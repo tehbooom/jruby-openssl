@@ -19,6 +19,8 @@ DEALINGS IN THE SOFTWARE.
  */
 package org.jruby.ext.openssl.impl.pem;
 
+import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.security.Key;
 import java.security.spec.AlgorithmParameterSpec;
 
@@ -26,11 +28,7 @@ import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.RC2ParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
-import org.bouncycastle.crypto.PBEParametersGenerator;
-import org.bouncycastle.crypto.generators.OpenSSLPBEParametersGenerator;
-import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.openssl.EncryptionException;
 
 import org.jruby.ext.openssl.SecurityHelper;
@@ -53,7 +51,7 @@ abstract class PEMUtilities
         throws EncryptionException
     {
         AlgorithmParameterSpec paramSpec = new IvParameterSpec(iv);
-        String                 alg;
+        String                 alg = null;
         String                 blockMode = "CBC";
         String                 padding = "PKCS5Padding";
         Key                    sKey;
@@ -80,23 +78,24 @@ abstract class PEMUtilities
         }
 
         // Figure out algorithm and key size.
+        try {
         if (dekAlgName.startsWith("DES-EDE"))
         {
             alg = "DESede";
             // "DES-EDE" is actually des2 in OpenSSL-speak!
             // "DES-EDE3" is des3.
             boolean des2 = !dekAlgName.startsWith("DES-EDE3");
-            sKey = getKey(password, alg, 24, iv, des2);
+            sKey = OpenSSLEVPPBE.secretKey(password, alg, 24, iv, des2);
         }
         else if (dekAlgName.startsWith("DES-"))
         {
             alg = "DES";
-            sKey = getKey(password, alg, 8, iv);
+            sKey = OpenSSLEVPPBE.secretKey(password, alg, 8, iv);
         }
         else if (dekAlgName.startsWith("BF-"))
         {
             alg = "Blowfish";
-            sKey = getKey(password, alg, 16, iv);
+            sKey = OpenSSLEVPPBE.secretKey(password, alg, 16, iv);
         }
         else if (dekAlgName.startsWith("RC2-"))
         {
@@ -110,7 +109,7 @@ abstract class PEMUtilities
             {
                 keyBits = 64;
             }
-            sKey = getKey(password, alg, keyBits / 8, iv);
+            sKey = OpenSSLEVPPBE.secretKey(password, alg, keyBits / 8, iv);
             if (paramSpec == null) // ECB block mode
             {
                 paramSpec = new RC2ParameterSpec(keyBits);
@@ -147,11 +146,15 @@ abstract class PEMUtilities
             {
                 throw new EncryptionException("unknown AES encryption with private key");
             }
-            sKey = getKey(password, "AES", keyBits / 8, salt);
+            sKey = OpenSSLEVPPBE.secretKey(password, "AES", keyBits / 8, salt);
         }
         else
         {
             throw new EncryptionException("unknown encryption with private key");
+        }
+        }
+        catch (IOException | GeneralSecurityException e) {
+            throw new EncryptionException(e.getMessage(), e);
         }
 
         String transformation = alg + "/" + blockMode + "/" + padding;
@@ -176,36 +179,5 @@ abstract class PEMUtilities
         {
             throw new EncryptionException("exception using cipher - please check password and data.", e);
         }
-    }
-
-    private static SecretKey getKey(
-        char[]  password,
-        String  algorithm,
-        int     keyLength,
-        byte[]  salt)
-    {
-        return getKey(password, algorithm, keyLength, salt, false);
-    }
-
-    private static SecretKey getKey(
-        char[]  password,
-        String  algorithm,
-        int     keyLength,
-        byte[]  salt,
-        boolean des2)
-    {
-        OpenSSLPBEParametersGenerator   pGen = new OpenSSLPBEParametersGenerator();
-
-        pGen.init(PBEParametersGenerator.PKCS5PasswordToBytes(password), salt);
-
-        KeyParameter keyParam;
-        keyParam = (KeyParameter) pGen.generateDerivedParameters(keyLength * 8);
-        byte[] key = keyParam.getKey();
-        if (des2 && key.length >= 24)
-        {
-            // For DES2, we must copy first 8 bytes into the last 8 bytes.
-            System.arraycopy(key, 0, key, 16, 8);
-        }
-        return new SecretKeySpec(key, algorithm);
     }
 }

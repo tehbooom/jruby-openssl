@@ -238,7 +238,7 @@ if fips_profile
   JRuby::Util.load_ext('org.jruby.ext.openssl.OpenSSL')
   %w[bn pkey cipher digest hmac x509 pkcs5 config].each { |mod| require "openssl/#{mod}" }
   require File.expand_path('fips/store_default_paths', __dir__)
-  if ENV['FIPS_RUBY_SUITE'] == 'ssl'
+  if %w[ssl pkcs7].include?(ENV['FIPS_RUBY_SUITE'])
     require File.expand_path('fips/ssl_bootstrap', __dir__)
   end
 else

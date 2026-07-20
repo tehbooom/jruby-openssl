@@ -37,7 +37,11 @@ WmsAXd0QV5UChfAJ2+Cz5U1bPszvIJGrzfAIoLxHv5rI5rseQzqZdPaFSe4Oehln
 -----END X509 CRL-----
 CRL
 
-  @@provider = org.bouncycastle.jce.provider.BouncyCastleProvider.new
+  @@provider = if ENV['JRUBY_OPENSSL_FIPS_TESTS'] == 'true'
+                 org.jruby.ext.openssl.SecurityHelper.getSecurityProvider
+               else
+                 org.bouncycastle.jce.provider.BouncyCastleProvider.new
+               end
 
   X509Cert = org.jruby.ext.openssl.x509store.X509AuxCertificate.new(
       java.security.cert.CertificateFactory.getInstance(

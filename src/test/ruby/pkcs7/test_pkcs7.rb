@@ -721,7 +721,7 @@ module PKCS7Test
 
     def test_encrypt_integration_test
       certs = [X509Cert]
-      c = Cipher.get_instance("AES", org.bouncycastle.jce.provider.BouncyCastleProvider.new)
+      c = Cipher.get_instance("AES", PKCS7Test.class_variable_get(:@@provider))
       cipher = org.jruby.ext.openssl.impl.CipherSpec.new(c, "AES-128-CBC", 128)
       data = "aaaaa\nbbbbb\nccccc\n".to_java_bytes
       PKCS7::encrypt(certs, data, cipher, PKCS7::BINARY)

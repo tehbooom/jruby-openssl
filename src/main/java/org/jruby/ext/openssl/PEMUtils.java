@@ -45,10 +45,7 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.RC2ParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
-import org.bouncycastle.crypto.CryptoServicesRegistrar;
-import org.bouncycastle.crypto.PBEParametersGenerator;
-import org.bouncycastle.crypto.generators.OpenSSLPBEParametersGenerator;
-import org.bouncycastle.crypto.params.KeyParameter;
+import java.security.SecureRandom;
 import org.bouncycastle.openssl.EncryptionException;
 import org.bouncycastle.openssl.PEMDecryptor;
 import org.bouncycastle.openssl.PEMDecryptorProvider;
@@ -60,6 +57,7 @@ import org.bouncycastle.openssl.PEMWriter;
 import org.bouncycastle.operator.OperatorCreationException;
 
 import org.jruby.ext.openssl.impl.pem.MiscPEMGeneratorHelper;
+import org.jruby.ext.openssl.impl.pem.OpenSSLEVPPBE;
 import org.jruby.ext.openssl.util.ByteArrayOutputStream;
 //import org.bouncycastle.util.io.pem.PemReader;
 
@@ -171,7 +169,7 @@ public abstract class PEMUtils {
         final PEMWriter pemWriter = new PEMWriter(writer);
 
         final SecureRandom random = SecurityHelper.isRequiredProviderMode() ?
-                SecurityHelper.getSecureRandom() : CryptoServicesRegistrar.getSecureRandom();
+                SecurityHelper.getSecureRandom() : new SecureRandom();
 
         pemWriter.writeObject(MiscPEMGeneratorHelper.newGenerator(obj, algorithm, password, random));
         pemWriter.flush();
@@ -240,7 +238,6 @@ public abstract class PEMUtils {
             String alg;
             String blockMode = "CBC";
             String padding = "PKCS5Padding";
-            Key sKey;
 
             // Figure out block mode and padding.
             if (dekAlgName.endsWith("-CFB"))
@@ -252,8 +249,6 @@ public abstract class PEMUtils {
                 "DES-EDE".equals(dekAlgName) ||
                 "DES-EDE3".equals(dekAlgName))
             {
-                // ECB is actually the default (though seldom used) when OpenSSL
-                // uses DES-EDE (des2) or DES-EDE3 (des3).
                 blockMode = "ECB";
                 paramSpec = null;
             }
@@ -263,81 +258,14 @@ public abstract class PEMUtils {
                 padding = "NoPadding";
             }
 
-
-            // Figure out algorithm and key size.
-            if (dekAlgName.startsWith("DES-EDE"))
-            {
-                alg = "DESede";
-                // "DES-EDE" is actually des2 in OpenSSL-speak!
-                // "DES-EDE3" is des3.
-                boolean des2 = !dekAlgName.startsWith("DES-EDE3");
-                sKey = secretKeySpec(password, alg, 24, iv, des2);
+            Key sKey;
+            try {
+                sKey = legacySecretKey(password, dekAlgName, iv);
             }
-            else if (dekAlgName.startsWith("DES-"))
-            {
-                alg = "DES";
-                sKey = secretKeySpec(password, alg, 8, iv);
+            catch (IOException | GeneralSecurityException e) {
+                throw new PEMException(e.getMessage(), e);
             }
-            else if (dekAlgName.startsWith("BF-"))
-            {
-                alg = "Blowfish";
-                sKey = secretKeySpec(password, alg, 16, iv);
-            }
-            else if (dekAlgName.startsWith("RC2-"))
-            {
-                alg = "RC2";
-                int keyBits = 128;
-                if (dekAlgName.startsWith("RC2-40-"))
-                {
-                    keyBits = 40;
-                }
-                else if (dekAlgName.startsWith("RC2-64-"))
-                {
-                    keyBits = 64;
-                }
-                sKey = secretKeySpec(password, alg, keyBits / 8, iv);
-                if (paramSpec == null) // ECB block mode
-                {
-                    paramSpec = new RC2ParameterSpec(keyBits);
-                }
-                else
-                {
-                    paramSpec = new RC2ParameterSpec(keyBits, iv);
-                }
-            }
-            else if (dekAlgName.startsWith("AES-"))
-            {
-                alg = "AES";
-                byte[] salt = iv;
-                if (salt.length > 8)
-                {
-                    salt = new byte[8];
-                    System.arraycopy(iv, 0, salt, 0, 8);
-                }
-
-                int keyBits;
-                if (dekAlgName.startsWith("AES-128-"))
-                {
-                    keyBits = 128;
-                }
-                else if (dekAlgName.startsWith("AES-192-"))
-                {
-                    keyBits = 192;
-                }
-                else if (dekAlgName.startsWith("AES-256-"))
-                {
-                    keyBits = 256;
-                }
-                else
-                {
-                    throw new PEMException("unknown AES encryption with private key");
-                }
-                sKey = secretKeySpec(password, "AES", keyBits / 8, salt);
-            }
-            else
-            {
-                throw new PEMException("unknown encryption with private key");
-            }
+            alg = legacyCipherAlgorithm(dekAlgName);
 
             String transformation = alg + "/" + blockMode + "/" + padding;
 
@@ -362,35 +290,77 @@ public abstract class PEMUtils {
             }
         }
 
-        private static SecretKey secretKeySpec(
+        private static SecretKey legacySecretKey(
             char[] password,
-            String algorithm,
-            int keyLength,
-            byte[] salt)
+            String dekAlgName,
+            byte[] iv)
+            throws IOException, GeneralSecurityException, PEMException
         {
-            return secretKeySpec(password, algorithm, keyLength, salt, false);
+            if (dekAlgName.startsWith("DES-EDE"))
+            {
+                final String alg = "DESede";
+                final boolean des2 = !dekAlgName.startsWith("DES-EDE3");
+                return OpenSSLEVPPBE.secretKey(password, alg, 24, iv, des2);
+            }
+            if (dekAlgName.startsWith("DES-"))
+            {
+                return OpenSSLEVPPBE.secretKey(password, "DES", 8, iv);
+            }
+            if (dekAlgName.startsWith("BF-"))
+            {
+                return OpenSSLEVPPBE.secretKey(password, "Blowfish", 16, iv);
+            }
+            if (dekAlgName.startsWith("RC2-"))
+            {
+                int keyBits = 128;
+                if (dekAlgName.startsWith("RC2-40-"))
+                {
+                    keyBits = 40;
+                }
+                else if (dekAlgName.startsWith("RC2-64-"))
+                {
+                    keyBits = 64;
+                }
+                return OpenSSLEVPPBE.secretKey(password, "RC2", keyBits / 8, iv);
+            }
+            if (dekAlgName.startsWith("AES-"))
+            {
+                byte[] salt = iv;
+                if (salt.length > 8)
+                {
+                    salt = new byte[8];
+                    System.arraycopy(iv, 0, salt, 0, 8);
+                }
+
+                int keyBits;
+                if (dekAlgName.startsWith("AES-128-"))
+                {
+                    keyBits = 128;
+                }
+                else if (dekAlgName.startsWith("AES-192-"))
+                {
+                    keyBits = 192;
+                }
+                else if (dekAlgName.startsWith("AES-256-"))
+                {
+                    keyBits = 256;
+                }
+                else
+                {
+                    throw new PEMException("unknown AES encryption with private key");
+                }
+                return OpenSSLEVPPBE.secretKey(password, "AES", keyBits / 8, salt);
+            }
+            throw new PEMException("unknown encryption with private key");
         }
 
-        private static SecretKey secretKeySpec(
-            char[] password,
-            String algorithm,
-            int keyLength,
-            byte[] salt,
-            boolean des2)
-        {
-            OpenSSLPBEParametersGenerator pGen = new OpenSSLPBEParametersGenerator();
-
-            pGen.init(PBEParametersGenerator.PKCS5PasswordToBytes(password), salt);
-
-            KeyParameter keyParam;
-            keyParam = (KeyParameter)pGen.generateDerivedParameters(keyLength * 8);
-            byte[] key = keyParam.getKey();
-            if (des2 && key.length >= 24)
-            {
-                // For DES2, we must copy first 8 bytes into the last 8 bytes.
-                System.arraycopy(key, 0, key, 16, 8);
-            }
-            return new SecretKeySpec(key, algorithm);
+        private static String legacyCipherAlgorithm(final String dekAlgName) throws PEMException {
+            if (dekAlgName.startsWith("DES-EDE")) return "DESede";
+            if (dekAlgName.startsWith("DES-")) return "DES";
+            if (dekAlgName.startsWith("BF-")) return "Blowfish";
+            if (dekAlgName.startsWith("RC2-")) return "RC2";
+            if (dekAlgName.startsWith("AES-")) return "AES";
+            throw new PEMException("unknown encryption with private key");
         }
 
     }

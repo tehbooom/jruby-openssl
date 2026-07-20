@@ -105,6 +105,7 @@ MVN_JRUBY_VERSION = '9.2.19.0'
 
 jruby_plugin! :gem do
   # when installing dependent gems we want to use the built in openssl not the one from this lib directory
+  execute_goal :initialize, :id => 'default-initialize', :addProjectClasspath => false, :libDirectory => 'something-which-does-not-exists'
   execute_goal :id => 'default-package', :addProjectClasspath => false, :libDirectory => 'something-which-does-not-exists'
   execute_goals :id => 'default-push', :skip => true
 end
@@ -213,9 +214,13 @@ profile :id => 'fips-tests' do
   plugin :surefire, '3.5.5' do
     execute_goal :test, :id => 'default-test', :skip => true
     execute_goal :test, :id => 'fips-provider-contract',
+      :argLine => '--add-opens java.base/java.security.cert=ALL-UNNAMED',
       :includes => [
         '**/FipsProviderContractTest.java',
-        '**/FipsRubyCoverageTest.java'
+        '**/FipsRubyCoverageTest.java',
+        '**/FipsSkipEnforcementTest.java',
+        '**/Group1PemBehaviorTest.java',
+        '**/Group4BehaviorTest.java'
       ],
       :classpathDependencyExcludes => [
         'org.bouncycastle:bcprov-jdk18on',

@@ -25,11 +25,10 @@ import org.junit.jupiter.api.TestInstance;
  * Requires bc-fips on the classpath with non-FIPS BC artifacts excluded by the
  * fips-tests Maven profile.
  *
- * <p>Scope is the eight requested crypto domains (bn, cipher, digest, kdf, pkcs5,
- * pkey, ssl, x509), 366 statically defined test methods across 24 files. The full
- * rake test task matches 39 test-ruby files (including two helper files with no
- * tests) and 523 statically defined test methods; out-of-scope files are listed in
- * printScopeManifest().
+ * <p>Scope matches the complete {@code rake test} inventory: 39 Ruby files and
+ * 523 statically defined test methods. Before the full-suite expansion, the FIPS
+ * profile covered 24 files and 366 methods in eight domains; the previously
+ * excluded files are listed in {@link #printScopeManifest()}.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class FipsRubyCoverageTest {
@@ -38,21 +37,30 @@ public class FipsRubyCoverageTest {
     private static final Path FIPS_GEM_HOME = PROJECT_ROOT.resolve("pkg/rubygems-fips");
     private static final String PATH_SEPARATOR = File.pathSeparator;
 
-    /** Requested-suite files only; 366 {@code def test_*} methods at last audit. */
+    /** Complete rake-test inventory; 523 {@code def test_*} methods at last audit. */
     private static final Map<String, List<String>> SUITES = new LinkedHashMap<>();
 
-    /**
-     * Present in {@code rake test} but outside the eight requested FIPS domains.
-     * Listed so nothing is silently omitted.
-     */
-    private static final Map<String, String> RAKE_ONLY_FILES = new LinkedHashMap<>();
+    /** Files omitted by the previous eight-domain FIPS harness. */
+    private static final Map<String, String> PREVIOUSLY_EXCLUDED_FILES = new LinkedHashMap<>();
 
     static {
+        SUITES.put("asn1", list("src/test/ruby/test_asn1.rb"));
         SUITES.put("bn", list("src/test/ruby/test_bn.rb"));
         SUITES.put("cipher", list("src/test/ruby/test_cipher.rb"));
         SUITES.put("digest", list("src/test/ruby/test_digest.rb"));
+        SUITES.put("hmac", list("src/test/ruby/test_hmac.rb"));
         SUITES.put("kdf", list("src/test/ruby/test_kdf.rb"));
+        SUITES.put("oaep", list("src/test/ruby/oaep/test_oaep.rb"));
+        SUITES.put("openssl", list(
+                "src/test/ruby/test_helper.rb",
+                "src/test/ruby/test_openssl.rb"));
         SUITES.put("pkcs5", list("src/test/ruby/pkcs5/test_pbkdf2.rb"));
+        SUITES.put("pkcs7", list(
+                "src/test/ruby/pkcs7/test_attribute.rb",
+                "src/test/ruby/pkcs7/test_bio.rb",
+                "src/test/ruby/pkcs7/test_mime.rb",
+                "src/test/ruby/pkcs7/test_pkcs7.rb",
+                "src/test/ruby/pkcs7/test_smime.rb"));
         SUITES.put("pkey", list(
                 "src/test/ruby/test_pkey.rb",
                 "src/test/ruby/test_pkey_dh.rb",
@@ -66,7 +74,13 @@ public class FipsRubyCoverageTest {
                 "src/test/ruby/ssl/test_context.rb",
                 "src/test/ruby/ssl/test_session.rb",
                 "src/test/ruby/ssl/test_ocsp.rb",
-                "src/test/ruby/ssl/test_write_flush.rb"));
+                "src/test/ruby/ssl/test_write_flush.rb",
+                "src/test/ruby/ssl/test_helper.rb"));
+        SUITES.put("random", list("src/test/ruby/test_random.rb"));
+        SUITES.put("security", list(
+                "src/test/ruby/test_security.rb",
+                "src/test/ruby/test_security_helper.rb"));
+        SUITES.put("spki", list("src/test/ruby/test_ns_spki.rb"));
         SUITES.put("x509", list(
                 "src/test/ruby/x509/test_x509cert.rb",
                 "src/test/ruby/x509/test_x509crl.rb",
@@ -76,21 +90,21 @@ public class FipsRubyCoverageTest {
                 "src/test/ruby/x509/test_x509revoked.rb",
                 "src/test/ruby/x509/test_x509store.rb"));
 
-        RAKE_ONLY_FILES.put("test_asn1.rb", "44 tests; ASN.1 not in requested FIPS domains");
-        RAKE_ONLY_FILES.put("pkcs7/test_attribute.rb", "1 test; PKCS7 not requested");
-        RAKE_ONLY_FILES.put("pkcs7/test_bio.rb", "3 tests; PKCS7 not requested");
-        RAKE_ONLY_FILES.put("pkcs7/test_mime.rb", "17 tests; PKCS7 not requested");
-        RAKE_ONLY_FILES.put("pkcs7/test_pkcs7.rb", "62 tests; PKCS7 not requested");
-        RAKE_ONLY_FILES.put("pkcs7/test_smime.rb", "10 tests; PKCS7 not requested");
-        RAKE_ONLY_FILES.put("oaep/test_oaep.rb", "1 test; OAEP not requested");
-        RAKE_ONLY_FILES.put("test_hmac.rb", "5 tests; HMAC file separate from test_digest.rb");
-        RAKE_ONLY_FILES.put("test_random.rb", "2 tests; Random not requested");
-        RAKE_ONLY_FILES.put("test_openssl.rb", "7 tests; OpenSSL meta not requested");
-        RAKE_ONLY_FILES.put("test_ns_spki.rb", "4 tests; SPKI not requested");
-        RAKE_ONLY_FILES.put("test_security_helper.rb", "1 test; security helper not requested");
-        RAKE_ONLY_FILES.put("test_security.rb", "0 tests; placeholder file");
-        RAKE_ONLY_FILES.put("test_helper.rb", "0 tests; shared helper matched by Rake glob");
-        RAKE_ONLY_FILES.put("ssl/test_helper.rb", "0 tests; SSL helper matched by Rake glob");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_asn1.rb", "44 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("pkcs7/test_attribute.rb", "1 test");
+        PREVIOUSLY_EXCLUDED_FILES.put("pkcs7/test_bio.rb", "3 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("pkcs7/test_mime.rb", "17 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("pkcs7/test_pkcs7.rb", "62 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("pkcs7/test_smime.rb", "10 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("oaep/test_oaep.rb", "1 test");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_hmac.rb", "5 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_random.rb", "2 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_openssl.rb", "7 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_ns_spki.rb", "4 tests");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_security_helper.rb", "1 test");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_security.rb", "0 tests; support file");
+        PREVIOUSLY_EXCLUDED_FILES.put("test_helper.rb", "0 tests; shared helper");
+        PREVIOUSLY_EXCLUDED_FILES.put("ssl/test_helper.rb", "0 tests; SSL helper");
     }
 
     private final Map<String, SuiteResult> suiteResults = new LinkedHashMap<>();
@@ -153,13 +167,13 @@ public class FipsRubyCoverageTest {
         for (List<String> files : SUITES.values()) {
             fipsFiles += files.size();
         }
-        System.out.println("FIPS Ruby scope: 8 requested domains, " + fipsFiles +
-                " files, 366 test methods (static def test_ count at last audit)");
-        System.out.println("Rake full suite: 39 test*.rb files, 523 test methods defined; " +
-                "~520 execute under rake (platform/version conditionals omit a few)");
-        System.out.println("Outside FIPS scope (" + (523 - 366) +
-                " methods, 16 files, not silently omitted):");
-        for (Map.Entry<String, String> entry : RAKE_ONLY_FILES.entrySet()) {
+        System.out.println("FIPS Ruby scope: complete rake suite, " + SUITES.size() +
+                " suites, " + fipsFiles +
+                " files, 523 test methods (static def test_ count at last audit)");
+        System.out.println("Previous FIPS scope: 8 domains, 24 files, 366 test methods");
+        System.out.println("Newly covered by full-suite expansion: 157 methods, " +
+                PREVIOUSLY_EXCLUDED_FILES.size() + " files:");
+        for (Map.Entry<String, String> entry : PREVIOUSLY_EXCLUDED_FILES.entrySet()) {
             System.out.println("  - src/test/ruby/" + entry.getKey() + ": " + entry.getValue());
         }
     }

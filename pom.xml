@@ -193,6 +193,16 @@ DO NOT MODIFY - GENERATED CODE
         <version>${jruby.plugins.version}</version>
         <executions>
           <execution>
+            <id>default-initialize</id>
+            <goals>
+              <goal>initialize</goal>
+            </goals>
+            <configuration>
+              <addProjectClasspath>false</addProjectClasspath>
+              <libDirectory>something-which-does-not-exists</libDirectory>
+            </configuration>
+          </execution>
+          <execution>
             <id>default-package</id>
             <configuration>
               <addProjectClasspath>false</addProjectClasspath>
@@ -758,9 +768,13 @@ DO NOT MODIFY - GENERATED CODE
                   <goal>test</goal>
                 </goals>
                 <configuration>
+                  <argLine>--add-opens java.base/java.security.cert=ALL-UNNAMED</argLine>
                   <includes>
                     <include>**/FipsProviderContractTest.java</include>
                     <include>**/FipsRubyCoverageTest.java</include>
+                    <include>**/FipsSkipEnforcementTest.java</include>
+                    <include>**/Group1PemBehaviorTest.java</include>
+                    <include>**/Group4BehaviorTest.java</include>
                   </includes>
                   <classpathDependencyExcludes>
                     <classpathDependencyExclude>org.bouncycastle:bcprov-jdk18on</classpathDependencyExclude>
