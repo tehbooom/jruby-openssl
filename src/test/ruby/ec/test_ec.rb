@@ -653,29 +653,13 @@ class TestEC < TestCase
     d = OpenSSL::BN.new(priv_key_hex, 16) if priv_key_hex # private_key
     point = OpenSSL::PKey::EC::Point.new(group, OpenSSL::BN.new(pub_key_hex, 16)) # public_key (x, y)
 
-    sequence = if priv_key_hex
-                 # https://datatracker.ietf.org/doc/html/rfc5915.html
-                 # ECPrivateKey ::= SEQUENCE {
-                 #   version        INTEGER { ecPrivkeyVer1(1) } (ecPrivkeyVer1),
-                 #   privateKey     OCTET STRING,
-                 #   parameters [0] ECParameters {{ NamedCurve }} OPTIONAL,
-                 #   publicKey  [1] BIT STRING OPTIONAL
-                 # }
+    der = if priv_key_hex
+            ec_private_key_der(curve, d.to_s(2), point.to_octet_string(:uncompressed))
+          else
+            ec_subject_public_key_der(curve, point.to_octet_string(:uncompressed))
+          end
 
-                 OpenSSL::ASN1::Sequence([
-                                           OpenSSL::ASN1::Integer(1),
-                                           OpenSSL::ASN1::OctetString(d.to_s(2)),
-                                           OpenSSL::ASN1::ObjectId(curve, 0, :EXPLICIT),
-                                           OpenSSL::ASN1::BitString(point.to_octet_string(:uncompressed), 1, :EXPLICIT)
-                                         ])
-               else
-                 OpenSSL::ASN1::Sequence([
-                                           OpenSSL::ASN1::Sequence([OpenSSL::ASN1::ObjectId('id-ecPublicKey'), OpenSSL::ASN1::ObjectId(curve)]),
-                                           OpenSSL::ASN1::BitString(point.to_octet_string(:uncompressed))
-                                         ])
-               end
-
-    key = OpenSSL::PKey::EC.new(sequence.to_der)
+    key = OpenSSL::PKey::EC.new(der)
     assert_equal group.curve_name, key.group.curve_name
     assert_equal group, key.group
     assert_equal point, key.public_key
@@ -712,35 +696,20 @@ class TestEC < TestCase
 
     point = OpenSSL::PKey::EC::Point.new(group, OpenSSL::BN.new([0x04, x_octets, y_octets].pack('Ca*a*'), 2))
 
-    sequence = if jwk_d
-                 # https://datatracker.ietf.org/doc/html/rfc5915.html
-                 # ECPrivateKey ::= SEQUENCE {
-                 #   version        INTEGER { ecPrivkeyVer1(1) } (ecPrivkeyVer1),
-                 #   privateKey     OCTET STRING,
-                 #   parameters [0] ECParameters {{ NamedCurve }} OPTIONAL,
-                 #   publicKey  [1] BIT STRING OPTIONAL
-                 # }
+    der = if jwk_d
+            priv_bytes = OpenSSL::BN.new(decode_octets(jwk_d), 2).to_s(2)
+            ec_private_key_der(curve, priv_bytes, point.to_octet_string(:uncompressed))
+          else
+            ec_subject_public_key_der(curve, point.to_octet_string(:uncompressed))
+          end
 
-                 OpenSSL::ASN1::Sequence([
-                                           OpenSSL::ASN1::Integer(1),
-                                           OpenSSL::ASN1::OctetString(OpenSSL::BN.new(decode_octets(jwk_d), 2).to_s(2)),
-                                           OpenSSL::ASN1::ObjectId(curve, 0, :EXPLICIT),
-                                           OpenSSL::ASN1::BitString(point.to_octet_string(:uncompressed), 1, :EXPLICIT)
-                                         ])
-               else
-                 OpenSSL::ASN1::Sequence([
-                                           OpenSSL::ASN1::Sequence([OpenSSL::ASN1::ObjectId('id-ecPublicKey'), OpenSSL::ASN1::ObjectId(curve)]),
-                                           OpenSSL::ASN1::BitString(point.to_octet_string(:uncompressed))
-                                         ])
-               end
-
-    key = OpenSSL::PKey::EC.new(sequence.to_der)
+    key = OpenSSL::PKey::EC.new(der)
     assert_equal group.curve_name, key.group.curve_name
     assert_equal group, key.group
     assert_equal point, key.public_key
     assert_equal d, key.private_key if d
   end
-  private :do_test_from_sequence
+  private :do_test_from_sequence_with_packed_point
 
   def decode_octets(base64_encoded_coordinate); require 'base64'
     bytes = ::Base64.urlsafe_decode64(base64_encoded_coordinate)
@@ -763,6 +732,69 @@ class TestEC < TestCase
 #  end
 
   private
+
+  # bc-fips 2.0.1 lacks the legacy DERTaggedObject(tagClass, tag, ...) constructor
+  # used by OpenSSL::ASN1 explicit tagging; build RFC5915 / SPKI DER directly instead.
+  def asn1_length(len)
+    if len < 0x80
+      len.chr
+    elsif len < 0x100
+      "\x81#{[len].pack('C')}"
+    else
+      "\x82#{[len].pack('n')}"
+    end
+  end
+
+  def asn1_tlv(tag, content)
+    tag.chr + asn1_length(content.bytesize) + content
+  end
+
+  def asn1_integer(value)
+    bytes = OpenSSL::BN.new(value).to_s(2)
+    asn1_tlv("\x02", bytes)
+  end
+
+  def asn1_octet_string(bytes)
+    asn1_tlv("\x04", bytes)
+  end
+
+  def asn1_bit_string(bytes)
+    asn1_tlv("\x03", "\x00" + bytes)
+  end
+
+  def asn1_sequence(*parts)
+    asn1_tlv("\x30", parts.join)
+  end
+
+  def asn1_explicit(tag, content)
+    asn1_tlv([0xA0 | tag].pack('C'), content)
+  end
+
+  CURVE_OID_DER = {
+    'prime256v1' => "\x06\x08\x2A\x86\x48\xCE\x3D\x03\x01\x07",
+    'secp256k1'  => "\x06\x05\x2B\x81\x04\x00\x0A",
+    'secp521r1'  => "\x06\x05\x2B\x81\x04\x00\x23",
+  }.freeze
+
+  ID_EC_PUBLIC_KEY_DER = "\x06\x07\x2A\x86\x48\xCE\x3D\x02\x01".freeze
+
+  def ec_private_key_der(curve, priv_bytes, pub_bytes)
+    oid = CURVE_OID_DER.fetch(curve) { raise "unsupported curve for DER fixture: #{curve}" }
+    asn1_sequence(
+      asn1_integer(1),
+      asn1_octet_string(priv_bytes),
+      asn1_explicit(0, oid),
+      asn1_explicit(1, asn1_bit_string(pub_bytes))
+    )
+  end
+
+  def ec_subject_public_key_der(curve, pub_bytes)
+    oid = CURVE_OID_DER.fetch(curve) { raise "unsupported curve for DER fixture: #{curve}" }
+    asn1_sequence(
+      asn1_sequence(ID_EC_PUBLIC_KEY_DER, oid),
+      asn1_bit_string(pub_bytes)
+    )
+  end
 
   def B(ary)
     [Array(ary).join].pack("H*")

@@ -217,7 +217,14 @@ public class PKeyDSA extends PKey {
                     catch (Exception e) { debugStackTrace(runtime, e); }
                 }
             }
-            catch (Exception e) { debugStackTrace(runtime, e); }
+            catch (Exception e) {
+                if (SecurityHelper.isRequiredProviderMode() &&
+                        hasUnavailablePublicKeyCause(e)) {
+                    throw newDSAError(runtime,
+                            "DSA public key is required; deriving y from x is unavailable", e);
+                }
+                debugStackTrace(runtime, e);
+            }
         }
         if ( key == null && ! noClassDef ) { // PEM_read_bio_DSAPublicKey
             try {
@@ -409,7 +416,8 @@ public class PKeyDSA extends PKey {
         try {
             final StringWriter writer = new StringWriter();
             if ( privateKey != null ) {
-                PEMInputOutput.writeDSAPrivateKey(writer, privateKey, spec, passwd);
+                PEMInputOutput.writeDSAPrivateKey(
+                        writer, privateKey, publicKey, spec, passwd);
             }
             else {
                 PEMInputOutput.writePublicKey(writer, publicKey);
@@ -422,6 +430,19 @@ public class PKeyDSA extends PKey {
         catch (IOException e) {
             throw newDSAError(context.runtime, e.getMessage(), e);
         }
+    }
+
+    private static boolean hasUnavailablePublicKeyCause(final Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            final String message = current.getMessage();
+            if (message != null &&
+                    message.contains("deriving y from x is unavailable")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     @Override

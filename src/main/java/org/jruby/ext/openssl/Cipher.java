@@ -28,6 +28,7 @@
 package org.jruby.ext.openssl;
 
 import java.io.PrintStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -175,13 +176,82 @@ public class Cipher extends RubyObject {
         if ( service != null ) {
             final String supportedModes = service.getAttribute("SupportedModes");
             if ( supportedModes == null ) return Algorithm.OPENSSL_BLOCK_MODES;
-            return StringHelper.split(supportedModes, '|');
+            return filterAdvertisedCipherModes(alg, StringHelper.split(supportedModes, '|'));
         }
         return null;
     }
 
+    private static String[] filterAdvertisedCipherModes(final String alg, final String[] modes) {
+        if ( modes == null || modes.length == 0 ) return modes;
+
+        final ArrayList<String> filtered = new ArrayList<>(modes.length);
+        for ( final String mode : modes ) {
+            if ( isAdvertisedCipherMode(alg, mode) ) filtered.add(mode);
+        }
+        return filtered.isEmpty() ? null : filtered.toArray(new String[filtered.size()]);
+    }
+
+    private static boolean isAdvertisedCipherMode(final String alg, final String mode) {
+        if ( "CFB1".equals(mode) || "PCBC".equals(mode) ) return false;
+        final String osslName = probeOsslCipherName(alg, mode);
+        final String[] algVals = probeAlgVals(alg, mode);
+        return osslName != null && algVals != null && canInstantiateOsslCipher(osslName, algVals);
+    }
+
+    private static String[] probeAlgVals(final String javaAlg, final String mode) {
+        if ( "AES".equals(javaAlg) ) return new String[] {"AES", mode, "128", "AES/" + mode};
+        if ( "Blowfish".equals(javaAlg) ) return new String[] {"BF", mode, null, "Blowfish/" + mode};
+        if ( "Camellia".equals(javaAlg) ) return new String[] {"CAMELLIA", mode, "128", "Camellia/" + mode};
+        if ( "CAST5".equals(javaAlg) ) return new String[] {"CAST", mode, null, "CAST5/" + mode};
+        if ( "CAST6".equals(javaAlg) ) return new String[] {"CAST6", mode, null, "CAST6/" + mode};
+        if ( "DES".equals(javaAlg) ) return new String[] {"DES", mode, null, "DES/" + mode};
+        if ( "DESede".equals(javaAlg) ) return new String[] {"DES", mode, "EDE3", "DESede/" + mode};
+        if ( "RC2".equals(javaAlg) ) return new String[] {"RC2", mode, null, "RC2/" + mode};
+        if ( "SEED".equals(javaAlg) ) return new String[] {"SEED", mode, null, "SEED/" + mode};
+        return null;
+    }
+
+    private static String probeOsslCipherName(final String javaAlg, final String mode) {
+        if ( "AES".equals(javaAlg) ) return "AES-128-" + mode;
+        if ( "Blowfish".equals(javaAlg) ) return "BF-" + mode;
+        if ( "Camellia".equals(javaAlg) ) return "CAMELLIA-128-" + mode;
+        if ( "CAST5".equals(javaAlg) ) return "CAST5-" + mode;
+        if ( "CAST6".equals(javaAlg) ) return "CAST6-" + mode;
+        if ( "DES".equals(javaAlg) ) return "DES-" + mode;
+        if ( "DESede".equals(javaAlg) ) return "DES-EDE3-" + mode;
+        if ( "RC2".equals(javaAlg) ) return "RC2-" + mode;
+        if ( "SEED".equals(javaAlg) ) return "SEED-" + mode;
+        return null;
+    }
+
+    private static boolean canInstantiateOsslCipher(final String osslName, final String[] algVals) {
+        try {
+            final String realName;
+            if ( algVals != null ) {
+                final Algorithm alg = new Algorithm(algVals[0], algVals[2], algVals[1]);
+                alg.realName = algVals[3];
+                alg.realNameNeedsPadding = true;
+                alg.padding = Algorithm.defaultPaddingForMode(algVals[1]);
+                realName = alg.getRealName();
+            }
+            else {
+                realName = Algorithm.getRealName(osslName);
+            }
+            return getCipherInstance(realName, true) != null;
+        }
+        catch (GeneralSecurityException e) {
+            return false;
+        }
+    }
+
+    private static void putInstantiableCipher(final String osslName, final String[] algVals) {
+        if ( canInstantiateOsslCipher(osslName, algVals) ) {
+            Algorithm.AllSupportedCiphers.CIPHERS_MAP.put(osslName, algVals);
+        }
+    }
+
     private static Provider.Service providerCipherService(final String alg) {
-        Provider securityProvider = SecurityHelper.securityProvider;
+        Provider securityProvider = SecurityHelper.getSecurityProviderIfAccessible();
         if ( securityProvider != null ) {
             return securityProvider.getService("Cipher", alg);
         }
@@ -215,7 +285,9 @@ public class Cipher extends RubyObject {
             if ( service != null ) {
                 serviceFound = true;
                 final String supportedModes = service.getAttribute("SupportedModes");
-                if ( supportedModes != null ) return StringHelper.split(supportedModes, '|');
+                if ( supportedModes != null ) {
+                    return filterAdvertisedCipherModes(alg, StringHelper.split(supportedModes, '|'));
+                }
             }
         }
         // if a service is found but has no SupportedModes configuration included
@@ -242,7 +314,7 @@ public class Cipher extends RubyObject {
             //this.padding = padding;
         }
 
-        private static final Set<String> KNOWN_BLOCK_MODES;
+        static final Set<String> KNOWN_BLOCK_MODES;
         // NOTE: CFB1 does not work as (OpenSSL) expects with BC (@see GH-35)
         private static final String[] OPENSSL_BLOCK_MODES = {
             "CBC", "CFB", /* "CFB1", */ "CFB8", "ECB", "OFB" // that Java supports
@@ -284,21 +356,21 @@ public class Cipher extends RubyObject {
                 if (modes != null) {
                     for (final String mode : modes) {
                         final String realName = "AES/" + mode; // + "/PKCS5Padding"
-                        CIPHERS_MAP.put("AES-128-" + mode, new String[]{"AES", mode, "128", realName});
-                        CIPHERS_MAP.put("AES-192-" + mode, new String[]{"AES", mode, "192", realName});
-                        CIPHERS_MAP.put("AES-256-" + mode, new String[]{"AES", mode, "256", realName});
+                        putInstantiableCipher("AES-128-" + mode, new String[]{"AES", mode, "128", realName});
+                        putInstantiableCipher("AES-192-" + mode, new String[]{"AES", mode, "192", realName});
+                        putInstantiableCipher("AES-256-" + mode, new String[]{"AES", mode, "256", realName});
                     }
                     final String realName = "AES/CBC";
-                    CIPHERS_MAP.put("AES128", new String[]{"AES", "CBC", "128", realName});
-                    CIPHERS_MAP.put("AES192", new String[]{"AES", "CBC", "192", realName});
-                    CIPHERS_MAP.put("AES256", new String[]{"AES", "CBC", "256", realName});
+                    putInstantiableCipher("AES128", new String[]{"AES", "CBC", "128", realName});
+                    putInstantiableCipher("AES192", new String[]{"AES", "CBC", "192", realName});
+                    putInstantiableCipher("AES256", new String[]{"AES", "CBC", "256", realName});
                 }
 
                 modes = cipherModes("Blowfish");
                 if (modes != null) {
-                    CIPHERS_MAP.put("BF", new String[]{"BF", "CBC", null, "Blowfish/CBC"});
+                    putInstantiableCipher("BF", new String[]{"BF", "CBC", null, "Blowfish/CBC"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("BF-" + mode, new String[]{"BF", mode, null, "Blowfish/" + mode});
+                        putInstantiableCipher("BF-" + mode, new String[]{"BF", mode, null, "Blowfish/" + mode});
                     }
                 }
 
@@ -306,75 +378,75 @@ public class Cipher extends RubyObject {
                 if (modes != null) {
                     for (final String mode : modes) {
                         final String realName = "Camellia/" + mode;
-                        CIPHERS_MAP.put("CAMELLIA-128-" + mode, new String[]{"CAMELLIA", mode, "128", realName});
-                        CIPHERS_MAP.put("CAMELLIA-192-" + mode, new String[]{"CAMELLIA", mode, "192", realName});
-                        CIPHERS_MAP.put("CAMELLIA-256-" + mode, new String[]{"CAMELLIA", mode, "256", realName});
+                        putInstantiableCipher("CAMELLIA-128-" + mode, new String[]{"CAMELLIA", mode, "128", realName});
+                        putInstantiableCipher("CAMELLIA-192-" + mode, new String[]{"CAMELLIA", mode, "192", realName});
+                        putInstantiableCipher("CAMELLIA-256-" + mode, new String[]{"CAMELLIA", mode, "256", realName});
                     }
                     final String realName = "Camellia/CBC";
-                    CIPHERS_MAP.put("CAMELLIA128", new String[]{"CAMELLIA", "CBC", "128", realName});
-                    CIPHERS_MAP.put("CAMELLIA192", new String[]{"CAMELLIA", "CBC", "192", realName});
-                    CIPHERS_MAP.put("CAMELLIA256", new String[]{"CAMELLIA", "CBC", "256", realName});
+                    putInstantiableCipher("CAMELLIA128", new String[]{"CAMELLIA", "CBC", "128", realName});
+                    putInstantiableCipher("CAMELLIA192", new String[]{"CAMELLIA", "CBC", "192", realName});
+                    putInstantiableCipher("CAMELLIA256", new String[]{"CAMELLIA", "CBC", "256", realName});
                 }
 
                 modes = cipherModes("CAST5");
                 if (modes != null) {
-                    CIPHERS_MAP.put("CAST", new String[]{"CAST", "CBC", null, "CAST5/CBC"});
-                    CIPHERS_MAP.put("CAST-CBC", CIPHERS_MAP.get("CAST"));
+                    putInstantiableCipher("CAST", new String[]{"CAST", "CBC", null, "CAST5/CBC"});
+                    putInstantiableCipher("CAST-CBC", new String[]{"CAST", "CBC", null, "CAST5/CBC"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("CAST5-" + mode, new String[]{"CAST", mode, null, "CAST5/" + mode});
+                        putInstantiableCipher("CAST5-" + mode, new String[]{"CAST", mode, null, "CAST5/" + mode});
                     }
                 }
 
                 modes = cipherModes("CAST6");
                 if (modes != null) {
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("CAST6-" + mode, new String[]{"CAST6", mode, null, "CAST6/" + mode});
+                        putInstantiableCipher("CAST6-" + mode, new String[]{"CAST6", mode, null, "CAST6/" + mode});
                     }
                 }
 
                 modes = cipherModes("DES");
                 if (modes != null) {
-                    CIPHERS_MAP.put("DES", new String[]{"DES", "CBC", null, "DES/CBC"});
+                    putInstantiableCipher("DES", new String[]{"DES", "CBC", null, "DES/CBC"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("DES-" + mode, new String[]{"DES", mode, null, "DES/" + mode});
+                        putInstantiableCipher("DES-" + mode, new String[]{"DES", mode, null, "DES/" + mode});
                     }
                 }
 
                 modes = cipherModes("DESede");
                 if (modes != null) {
-                    CIPHERS_MAP.put("DES-EDE", new String[]{"DES", "ECB", "EDE", "DESede/ECB"});
-                    CIPHERS_MAP.put("DES-EDE-CBC", new String[]{"DES", "CBC", "EDE", "DESede/CBC"});
-                    CIPHERS_MAP.put("DES-EDE-CFB", new String[]{"DES", "CBC", "EDE", "DESede/CFB"});
-                    CIPHERS_MAP.put("DES-EDE-OFB", new String[]{"DES", "CBC", "EDE", "DESede/OFB"});
-                    CIPHERS_MAP.put("DES-EDE3", new String[]{"DES", "ECB", "EDE3", "DESede/ECB"});
+                    putInstantiableCipher("DES-EDE", new String[]{"DES", "ECB", "EDE", "DESede/ECB"});
+                    putInstantiableCipher("DES-EDE-CBC", new String[]{"DES", "CBC", "EDE", "DESede/CBC"});
+                    putInstantiableCipher("DES-EDE-CFB", new String[]{"DES", "CFB", "EDE", "DESede/CFB"});
+                    putInstantiableCipher("DES-EDE-OFB", new String[]{"DES", "OFB", "EDE", "DESede/OFB"});
+                    putInstantiableCipher("DES-EDE3", new String[]{"DES", "ECB", "EDE3", "DESede/ECB"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("DES-EDE3-" + mode, new String[]{"DES", mode, "EDE3", "DESede/" + mode});
+                        putInstantiableCipher("DES-EDE3-" + mode, new String[]{"DES", mode, "EDE3", "DESede/" + mode});
                     }
-                    CIPHERS_MAP.put("DES3", new String[]{"DES", "CBC", "EDE3", "DESede/CBC"});
+                    putInstantiableCipher("DES3", new String[]{"DES", "CBC", "EDE3", "DESede/CBC"});
                 }
 
                 modes = cipherModes("RC2");
                 if (modes != null) {
-                    CIPHERS_MAP.put("RC2", new String[]{"RC2", "CBC", null, "RC2/CBC"});
+                    putInstantiableCipher("RC2", new String[]{"RC2", "CBC", null, "RC2/CBC"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("RC2-" + mode, new String[]{"RC2", mode, null, "RC2/" + mode});
+                        putInstantiableCipher("RC2-" + mode, new String[]{"RC2", mode, null, "RC2/" + mode});
                     }
-                    CIPHERS_MAP.put("RC2-40-CBC", new String[]{"RC2", "CBC", "40", "RC2/CBC"});
-                    CIPHERS_MAP.put("RC2-64-CBC", new String[]{"RC2", "CBC", "64", "RC2/CBC"});
+                    putInstantiableCipher("RC2-40-CBC", new String[]{"RC2", "CBC", "40", "RC2/CBC"});
+                    putInstantiableCipher("RC2-64-CBC", new String[]{"RC2", "CBC", "64", "RC2/CBC"});
                 }
 
                 modes = cipherModes("RC4"); // NOTE: stream cipher (BC supported)
                 if (modes != null) {
-                    CIPHERS_MAP.put("RC4", new String[]{"RC4", null, null, "RC4"});
-                    CIPHERS_MAP.put("RC4-40", new String[]{"RC4", null, "40", "RC4"});
+                    putInstantiableCipher("RC4", new String[]{"RC4", null, null, "RC4"});
+                    putInstantiableCipher("RC4-40", new String[]{"RC4", null, "40", "RC4"});
                     //supportedCiphers.put( "RC2-HMAC-MD5", new String[] { "RC4", null, null, "RC4" });
                 }
 
                 modes = cipherModes("SEED");
                 if (modes != null) {
-                    CIPHERS_MAP.put("SEED", new String[]{"SEED", "CBC", null, "SEED/CBC"});
+                    putInstantiableCipher("SEED", new String[]{"SEED", "CBC", null, "SEED/CBC"});
                     for (final String mode : modes) {
-                        CIPHERS_MAP.put("SEED-" + mode, new String[]{"SEED", mode, null, "SEED/" + mode});
+                        putInstantiableCipher("SEED-" + mode, new String[]{"SEED", mode, null, "SEED/" + mode});
                     }
                 }
             }
@@ -551,6 +623,10 @@ public class Cipher extends RubyObject {
         String getPadding() {
             if ( mode == null ) return null; // if ( "RC4".equals(base) ) return null;
             return padding;
+        }
+
+        static String defaultPaddingForMode(final String cryptoMode) {
+            return getPaddingType(null, cryptoMode);
         }
 
         private static String getPaddingType(final String padding, final String cryptoMode) {

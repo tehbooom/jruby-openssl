@@ -31,6 +31,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.security.AlgorithmParameters;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.KeyFactorySpi;
@@ -104,9 +105,17 @@ import org.jruby.util.SafePropertyAccessor;
  */
 public abstract class SecurityHelper {
 
+    static final String REQUIRED_PROVIDER_PROPERTY = "jruby.openssl.fips.provider";
+    static final String REQUIRED_SSL_PROVIDER_PROPERTY = "jruby.openssl.fips.ssl.provider";
+
     private static String BC_PROVIDER_CLASS = "org.bouncycastle.jce.provider.BouncyCastleProvider";
     static boolean setBouncyCastleProvider = true; // (package access for tests)
     static volatile Provider securityProvider; // 'BC' provider (package access for tests)
+    static volatile Provider requiredProvider; // deployment-registered provider in strict mode
+    private static volatile String requiredProviderRequirement;
+    static volatile Provider requiredSslProvider; // deployment-registered JSSE provider in strict mode
+    private static volatile RequiredProviderSpec requiredSslProviderSpec;
+    private static volatile String requiredSslProviderRequirement;
     private static volatile Boolean registerProvider = null;
     static final Map<String, Class> implEngines = new ConcurrentHashMap<>(16, 0.75f, 1);
 
@@ -115,6 +124,9 @@ public abstract class SecurityHelper {
     static volatile Provider jsseProvider;
 
     public static Provider getSecurityProvider() {
+        final Provider required = requiredProvider;
+        if ( required != null ) return required;
+
         Provider provider = securityProvider;
         if ( setBouncyCastleProvider && provider == null ) {
             synchronized(SecurityHelper.class) {
@@ -129,6 +141,124 @@ public abstract class SecurityHelper {
         return provider;
     }
 
+    /**
+     * Resolve the deployment-owned provider required by strict FIPS mode.
+     *
+     * The provider must already be registered. This method never instantiates or
+     * registers it.
+     */
+    public static synchronized void configureRequiredProvider() {
+        final String requirement = SafePropertyAccessor.getProperty(REQUIRED_PROVIDER_PROPERTY);
+        if ( requirement == null ) {
+            requiredProvider = null;
+            requiredProviderRequirement = null;
+            return;
+        }
+
+        final RequiredProviderSpec spec = RequiredProviderSpec.parse(REQUIRED_PROVIDER_PROPERTY, requirement);
+        final Provider provider = resolveRequiredProvider(spec, "FIPS");
+
+        requiredProvider = provider;
+        requiredProviderRequirement = spec.toString();
+        OpenSSL.debug("using required FIPS provider: " + provider.getName() + ":" + providerVersion(provider));
+    }
+
+    public static synchronized void configureRequiredSslProvider() {
+        final String requirement = SafePropertyAccessor.getProperty(REQUIRED_SSL_PROVIDER_PROPERTY);
+        if ( requirement == null ) {
+            requiredSslProvider = null;
+            requiredSslProviderSpec = null;
+            requiredSslProviderRequirement = null;
+            return;
+        }
+
+        final RequiredProviderSpec spec =
+                RequiredProviderSpec.parse(REQUIRED_SSL_PROVIDER_PROPERTY, requirement);
+        final Provider provider = resolveRequiredProvider(spec, "FIPS JSSE");
+
+        requiredSslProvider = provider;
+        requiredSslProviderSpec = spec;
+        requiredSslProviderRequirement = spec.toString();
+        OpenSSL.debug("using required FIPS JSSE provider: " +
+                provider.getName() + ":" + providerVersion(provider));
+    }
+
+    private static Provider resolveRequiredProvider(final RequiredProviderSpec spec, final String role) {
+        final Provider provider = Security.getProvider(spec.name);
+        if ( provider == null ) {
+            throw new IllegalStateException("Required " + role + " provider '" + spec + "' was not found; " +
+                    "the deployment must register provider '" + spec.name + "' before loading jruby-openssl");
+        }
+
+        final String version = providerVersion(provider);
+        if ( spec.versionGlob != null && !globMatches(spec.versionGlob, version) ) {
+            throw new IllegalStateException("Required " + role + " provider '" + spec + "' was not found; found '" +
+                    provider.getName() + ":" + version + "'");
+        }
+        return provider;
+    }
+
+    public static boolean isRequiredProviderMode() {
+        return requiredProvider != null;
+    }
+
+    static String providerVersion(final Provider provider) {
+        try {
+            // Provider#getVersionStr was added after Java 8, which remains our
+            // compilation target. Reflect so newer runtimes retain all version
+            // components while Java 8 uses its reported numeric version.
+            final Method getVersionStr = Provider.class.getMethod("getVersionStr");
+            return (String) getVersionStr.invoke(provider);
+        }
+        catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ex) {
+            return Double.toString(provider.getVersion());
+        }
+    }
+
+    static boolean globMatches(final String glob, final String value) {
+        final StringBuilder regex = new StringBuilder(glob.length() * 2);
+        regex.append('^');
+        for (int i = 0; i < glob.length(); i++) {
+            final char ch = glob.charAt(i);
+            if ( ch == '*' ) {
+                regex.append(".*");
+            }
+            else {
+                if ( "\\.^$|?+()[]{}".indexOf(ch) >= 0 ) regex.append('\\');
+                regex.append(ch);
+            }
+        }
+        regex.append('$');
+        return value.matches(regex.toString());
+    }
+
+    private static final class RequiredProviderSpec {
+        private final String name;
+        private final String versionGlob;
+
+        private RequiredProviderSpec(final String name, final String versionGlob) {
+            this.name = name;
+            this.versionGlob = versionGlob;
+        }
+
+        private static RequiredProviderSpec parse(final String property, final String value) {
+            final String trimmed = value.trim();
+            final int separator = trimmed.indexOf(':');
+            final String name = (separator < 0 ? trimmed : trimmed.substring(0, separator)).trim();
+            final String version = separator < 0 ? null : trimmed.substring(separator + 1).trim();
+            if ( name.isEmpty() || (separator >= 0 && version.isEmpty()) ) {
+                throw new IllegalArgumentException("Invalid " + property +
+                        " value '" + value + "'; expected name or name:versionglob");
+            }
+            return new RequiredProviderSpec(name, version);
+        }
+
+        @Override
+        public String toString() {
+            return versionGlob == null ? name : name + ":" + versionGlob;
+        }
+    }
+
     private static Provider getJsseProvider(final String name) {
         Provider provider = jsseProvider;
         if ( setJsseProvider && provider == null ) {
@@ -141,7 +271,7 @@ public abstract class SecurityHelper {
                     catch (Exception ex) {
                         debug("failed to get provider: " + name, ex);
                     }
-                    if (provider == null && "BCJSSE".equals(name)) {
+                    if (provider == null && requiredProvider == null && "BCJSSE".equals(name)) {
                         provider = newBouncyCastleProvider(BCJSSE_PROVIDER_CLASS);
                     }
                     jsseProvider = provider; setJsseProvider = false;
@@ -178,6 +308,8 @@ public abstract class SecurityHelper {
     }
 
     static Provider getSecurityProviderIfAccessible() {
+        final Provider required = requiredProvider;
+        if ( required != null ) return required;
         return SPI_ACCESSIBLE ? getSecurityProvider() : null;
     }
 
@@ -236,6 +368,8 @@ public abstract class SecurityHelper {
      */
     public static CertificateFactory getCertificateFactory(final String type)
         throws CertificateException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return CertificateFactory.getInstance(type, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getCertificateFactory(type, provider);
@@ -256,6 +390,8 @@ public abstract class SecurityHelper {
      */
     public static KeyFactory getKeyFactory(final String algorithm)
         throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getKeyFactory(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getKeyFactory(algorithm, provider);
@@ -269,11 +405,20 @@ public abstract class SecurityHelper {
         return KeyFactory.getInstance(algorithm, provider);
     }
 
+    public static AlgorithmParameters getAlgorithmParameters(final String algorithm)
+        throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return AlgorithmParameters.getInstance(algorithm, required);
+        return AlgorithmParameters.getInstance(algorithm);
+    }
+
     /**
      * @note code calling this should not assume BC provider internals !
      */
     public static KeyPairGenerator getKeyPairGenerator(final String algorithm)
         throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getKeyPairGenerator(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getKeyPairGenerator(algorithm, provider);
@@ -293,6 +438,8 @@ public abstract class SecurityHelper {
      */
     public static KeyStore getKeyStore(final String type)
         throws KeyStoreException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getKeyStore(type, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getKeyStore(type, provider);
@@ -310,6 +457,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static MessageDigest getMessageDigest(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getMessageDigest(algorithm, required);
         try {
             return MessageDigest.getInstance(algorithm);
         } catch (NoSuchAlgorithmException nsae) {
@@ -328,6 +477,21 @@ public abstract class SecurityHelper {
     }
 
     public static SecureRandom getSecureRandom() {
+        final Provider required = requiredProvider;
+        if ( required != null ) {
+            final String algorithm = getSecureRandomAlgorithm(required);
+            if ( algorithm == null ) {
+                throw new IllegalStateException("Required FIPS provider '" + requiredProviderRequirement +
+                        "' does not provide SecureRandom");
+            }
+            try {
+                return getSecureRandom(algorithm, required);
+            }
+            catch (NoSuchAlgorithmException ex) {
+                throw new IllegalStateException("Required FIPS provider '" + requiredProviderRequirement +
+                        "' cannot create SecureRandom algorithm '" + algorithm + "'", ex);
+            }
+        }
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) {
@@ -363,6 +527,8 @@ public abstract class SecurityHelper {
      */
     public static Cipher getCipher(final String transformation)
         throws NoSuchAlgorithmException, NoSuchPaddingException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getCipher(transformation, required);
         try {
             if ( tryCipherInternal == Boolean.FALSE ) {
                 final Provider provider = getSecurityProvider();
@@ -448,6 +614,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static Signature getSignature(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getSignature(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getSignature(algorithm, provider);
@@ -466,6 +634,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static Mac getMac(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getMac(algorithm, required);
         Mac mac = null;
         final Provider provider = getSecurityProviderIfAccessible();
         if ( provider != null ) {
@@ -495,6 +665,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static KeyGenerator getKeyGenerator(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getKeyGenerator(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getKeyGenerator(algorithm, provider);
@@ -513,6 +685,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static KeyAgreement getKeyAgreement(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getKeyAgreement(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getKeyAgreement(algorithm, provider);
@@ -531,6 +705,8 @@ public abstract class SecurityHelper {
      * @note code calling this should not assume BC provider internals !
      */
     public static SecretKeyFactory getSecretKeyFactory(final String algorithm) throws NoSuchAlgorithmException {
+        final Provider required = requiredProvider;
+        if ( required != null ) return getSecretKeyFactory(algorithm, required);
         try {
             final Provider provider = getSecurityProviderIfAccessible();
             if ( provider != null ) return getSecretKeyFactory(algorithm, provider);
@@ -559,6 +735,16 @@ public abstract class SecurityHelper {
 
     public static SSLContext getSSLContext(final String protocol)
         throws NoSuchAlgorithmException {
+        final RequiredProviderSpec requiredSpec = requiredSslProviderSpec;
+        if ( requiredSpec != null ) {
+            final Provider required = resolveRequiredProvider(requiredSpec, "FIPS JSSE");
+            requiredSslProvider = required;
+            return getSSLContext(protocol, required);
+        }
+        if ( requiredProvider != null ) {
+            throw new IllegalStateException("Strict FIPS mode requires property '" +
+                    REQUIRED_SSL_PROVIDER_PROPERTY + "' for SSLContext");
+        }
         try {
             if ( providerSSLContext != null && ! "SSL".equals(protocol) ) { // only TLS supported in BCJSSE
                 final Provider provider = getJsseProvider(providerSSLContext);
@@ -583,7 +769,20 @@ public abstract class SecurityHelper {
 
     static boolean verify(final X509CRL crl, final PublicKey publicKey, final boolean silent)
         throws NoSuchAlgorithmException, CRLException, InvalidKeyException, SignatureException {
+        if ( requiredProvider != null ) return verifyWithSignature(crl, publicKey, silent);
         return BCInternal.verify(crl, publicKey, silent);
+    }
+
+    private static boolean verifyWithSignature(final X509CRL crl, final PublicKey publicKey,
+        final boolean silent)
+        throws NoSuchAlgorithmException, CRLException, InvalidKeyException, SignatureException {
+
+        final Signature signature = getSignature(crl.getSigAlgName());
+        signature.initVerify(publicKey);
+        signature.update(crl.getTBSCertList());
+        if ( signature.verify(crl.getSignature()) ) return true;
+        if ( silent ) return false;
+        throw new SignatureException("CRL does not verify with supplied public key.");
     }
 
     // Lazy-loaded holder for bc-internal CRL verification classes absent from bc-fips.

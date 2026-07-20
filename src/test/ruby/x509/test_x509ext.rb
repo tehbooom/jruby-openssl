@@ -4,7 +4,9 @@ require File.expand_path('../test_helper', File.dirname(__FILE__))
 class TestX509Extension < TestCase
 
   if defined? JRUBY_VERSION
-    def setup; require 'jopenssl/load' end
+    def setup
+      require 'jopenssl/load' unless fips_test_profile?
+    end
   else
     def setup; require 'openssl' end
   end

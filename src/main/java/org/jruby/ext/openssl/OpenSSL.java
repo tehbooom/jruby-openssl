@@ -54,6 +54,8 @@ public final class OpenSSL {
     }
 
     public static void createOpenSSL(final Ruby runtime) {
+        SecurityHelper.configureRequiredProvider();
+        SecurityHelper.configureRequiredSslProvider();
         SecurityHelper.setRegisterProvider( SafePropertyAccessor.getBoolean("jruby.openssl.provider.register") );
 
         final RubyModule _OpenSSL = runtime.getOrCreateModule("OpenSSL");
@@ -332,6 +334,7 @@ public final class OpenSSL {
     }
 
     static SecureRandom getSecureRandom(final Ruby runtime, final boolean nullByDefault) {
+        if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
         if ( tryContextSecureRandom ) {
             SecureRandom random = getSecureRandomFrom(runtime.getCurrentContext());
             if ( random != null ) return random;
@@ -340,6 +343,7 @@ public final class OpenSSL {
     }
 
     static SecureRandom getSecureRandom(final ThreadContext context) {
+        if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
         if ( tryContextSecureRandom ) {
             SecureRandom random = getSecureRandomFrom(context);
             if ( random != null ) return random;

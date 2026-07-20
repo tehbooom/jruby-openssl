@@ -38,7 +38,6 @@ import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1Encoding;
 import org.bouncycastle.asn1.ASN1Integer;
-import org.bouncycastle.asn1.ASN1IA5String;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Primitive;
@@ -430,31 +429,21 @@ public class X509Extension extends RubyObject {
                     for ( int i = 0; i < size; i++ ) {
                         final ASN1Encodable enc = seq.getObjectAt(i);
                         if (enc instanceof ASN1TaggedObject) {
-                            ASN1Primitive obj = ((ASN1TaggedObject) enc).getBaseObject().toASN1Primitive();
-                            switch( ((ASN1TaggedObject) enc).getTagNo() ) {
+                            final ASN1TaggedObject tagged = (ASN1TaggedObject) enc;
+                            switch( tagged.getTagNo() ) {
                                 case 0 :
-                                    ASN1Primitive keyid = obj.toASN1Primitive();
                                     val.append(keyid_);
-                                    hexBytes( keyidBytes(keyid), val );
+                                    hexBytes( keyidBytes(tagged), val );
                                     break;
                                 case 1 :
                                     GeneralName name;
-                                    if (obj instanceof ASN1Sequence) { // GeneralNames -> toASN1Primitive()
-                                        GeneralName[] names = GeneralNames.getInstance(obj).getNames();
-                                        name = names.length > 0 ? names[0] : null;
-                                    } else {
-                                        name = GeneralName.getInstance(obj);
-                                    }
+                                    final GeneralName[] issuerNames = generalNamesFromEncodable(tagged);
+                                    name = issuerNames.length > 0 ? issuerNames[0] : null;
                                     if (name != null) formatGeneralName(name, val, true);
                                     break;
                                 case 2 : // serial
                                     val.append(new byte[] { 's','e','r','i','a','l',':' });
-                                    if (obj instanceof ASN1Integer) {
-                                        hexBytes( ((ASN1Integer) obj).getValue().toByteArray(), val);
-                                    }
-                                    else {
-                                        hexBytes( ((ASN1OctetString) obj ).getOctets(), val );
-                                    }
+                                    hexBytes( ASN1Integer.getInstance(tagged, false).getValue().toByteArray(), val );
                                     break;
                             }
                         } else if (size == 1) {
@@ -501,7 +490,7 @@ public class X509Extension extends RubyObject {
                     ASN1Encodable value = getRealValue();
                     final ByteList val = new ByteList(64);
                     if ( value instanceof ASN1TaggedObject ) {
-                        formatGeneralName(GeneralName.getInstance(value), val, false);
+                        formatGeneralName(generalNameFromEncodable(value), val, false);
                         return runtime.newString( val );
                     }
                     if ( value instanceof GeneralName ) {
@@ -513,11 +502,11 @@ public class X509Extension extends RubyObject {
                         value = ASN1.readObject( ((ASN1OctetString) value).getOctets());
                     }
                     if ( value instanceof ASN1TaggedObject ) { // DERTaggedObject (issuerAltName wrapping)
-                        formatGeneralName(GeneralName.getInstance(value), val, false);
+                        formatGeneralName(generalNameFromEncodable(value), val, false);
                         return runtime.newString( val );
                     }
 
-                    final GeneralName[] names = GeneralNames.getInstance(value).getNames();
+                    final GeneralName[] names = generalNamesFromEncodable(value);
                     for ( int i = 0; i < names.length; i++ ) {
                         boolean other = formatGeneralName(names[i], val, false);
                         if ( i < names.length - 1 ) {
@@ -591,8 +580,7 @@ public class X509Extension extends RubyObject {
                             val.append(ByteList.plain("Full Name:"));
                             val.append('\n');
 
-                            final GeneralNames generalNames = GeneralNames.getInstance(dpName.getName());
-                            final GeneralName[] names = generalNames.getNames();
+                            final GeneralName[] names = generalNamesFromEncodable(dpName.getName());
                             for ( int j = 0; j < names.length; j++ ) {
                                 val.append(ByteList.plain("  "));
                                 formatGeneralName(names[j], val, false);
@@ -683,12 +671,37 @@ public class X509Extension extends RubyObject {
 
     private static byte[] keyidBytes(ASN1Primitive keyid) throws IOException {
         if ( keyid instanceof ASN1TaggedObject ) {
-            keyid = ((ASN1TaggedObject) keyid).getBaseObject().toASN1Primitive();
+            return ASN1OctetString.getInstance((ASN1TaggedObject) keyid, false).getOctets();
         }
         if ( keyid instanceof ASN1OctetString ) {
-            return ((ASN1OctetString) keyid).getOctets();
+            byte[] octets = ((ASN1OctetString) keyid).getOctets();
+            if ( octets.length > 0 && octets[0] == BERTags.OCTET_STRING ) {
+                try {
+                    return ASN1OctetString.getInstance(octets).getOctets();
+                }
+                catch (IllegalArgumentException e) {
+                    // A raw key identifier may coincidentally start with tag 0x04.
+                    // Treat it as nested DER only when the complete value decodes.
+                }
+            }
+            return octets;
         }
-        return keyid.getEncoded(ASN1Encoding.DER);
+        return ASN1OctetString.getInstance(keyid).getOctets();
+    }
+
+    private static GeneralName generalNameFromEncodable(final ASN1Encodable obj) {
+        if ( obj instanceof GeneralName ) return (GeneralName) obj;
+        if ( obj instanceof ASN1TaggedObject ) {
+            return GeneralName.getInstance((ASN1TaggedObject) obj, false);
+        }
+        return GeneralName.getInstance(obj);
+    }
+
+    private static GeneralName[] generalNamesFromEncodable(final ASN1Encodable obj) {
+        if ( obj instanceof ASN1TaggedObject ) {
+            return GeneralNames.getInstance((ASN1TaggedObject) obj, false).getNames();
+        }
+        return GeneralNames.getInstance(obj).getNames();
     }
 
     private static String accessDescriptionMethodName(final Ruby runtime, final AccessDescription description) {
@@ -720,7 +733,7 @@ public class X509Extension extends RubyObject {
         case GeneralName.uniformResourceIdentifier:
             if ( ! tagged ) out.append('U').append('R').append('I').
                 append(':');
-            val = ASN1IA5String.getInstance(obj).getString();
+            val = ((ASN1String) obj).getString();
             out.append( ByteList.plain(val) );
             break;
         case GeneralName.directoryName:

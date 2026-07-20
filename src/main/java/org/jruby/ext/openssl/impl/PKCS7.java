@@ -143,7 +143,7 @@ public class PKCS7 {
                 ASN1Encodable content = size == 1 ? null : ((ASN1Sequence) obj).getObjectAt(1);
 
                 if (content != null && content instanceof ASN1TaggedObject && ((ASN1TaggedObject) content).getTagNo() == 0) {
-                    content = ((ASN1TaggedObject) content).getBaseObject().toASN1Primitive();
+                    content = taggedObjectContent((ASN1TaggedObject) content);
                 }
                 p7.initiateWith(nid, content);
             }
@@ -154,6 +154,26 @@ public class PKCS7 {
         }
 
         return p7;
+    }
+
+    private static ASN1Encodable taggedObjectContent(final ASN1TaggedObject tagged) {
+        try {
+            return (ASN1Encodable) ASN1TaggedObject.class.getMethod("getExplicitBaseObject").invoke(tagged);
+        }
+        catch (NoSuchMethodException e) {
+            try {
+                return (ASN1Encodable) ASN1TaggedObject.class.getMethod("getObject").invoke(tagged);
+            }
+            catch (NoSuchMethodException ex) {
+                return tagged.getLoadedObject();
+            }
+            catch (ReflectiveOperationException ex) {
+                throw new IllegalArgumentException("cannot read tagged PKCS7 content", ex);
+            }
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException("cannot read tagged PKCS7 content", e);
+        }
     }
 
     /* c: d2i_PKCS7_bio

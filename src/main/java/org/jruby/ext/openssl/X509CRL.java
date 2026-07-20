@@ -613,7 +613,9 @@ public class X509CRL extends RubyObject {
             }
             */
 
-            ContentSigner signer = new JcaContentSignerBuilder( signatureAlgorithm ).build(privateKey);
+            final JcaContentSignerBuilder signerBuilder =
+                    newJcaContentSignerBuilder(signatureAlgorithm);
+            ContentSigner signer = signerBuilder.build(privateKey);
             this.crlHolder = generator.build( signer ); this.crl = null;
         }
         catch (IllegalStateException e) {
@@ -641,6 +643,14 @@ public class X509CRL extends RubyObject {
         this.crlValue = new DLSequence(build2);
         changed = false;
         return this;
+    }
+
+    static JcaContentSignerBuilder newJcaContentSignerBuilder(final String algorithm) {
+        final JcaContentSignerBuilder builder = new JcaContentSignerBuilder(algorithm);
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setProvider(SecurityHelper.getSecurityProvider());
+        }
+        return builder;
     }
 
     private static String getSignatureAlgorithm(final Ruby runtime, final PKey key, final IRubyObject digest) {

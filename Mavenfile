@@ -90,7 +90,14 @@ jar 'org.junit.jupiter:junit-jupiter', '5.11.4', :scope => :test
 # a test dependency to provide digest and other stdlib bits, needed when loading OpenSSL in Java unit tests
 jar 'org.jruby:jruby-stdlib', jruby_compile_compat, :scope => :test
 
-plugin :surefire, '3.5.5'
+plugin :surefire, '3.5.5' do
+  # FIPS-only tests require -Pfips-tests (bc-fips classpath + provider fixture).
+  # Keep all FIPS-only *Test.java classes out of the default non-FIPS surefire run.
+  execute_goal :test, :id => 'default-test',
+    :excludes => [
+      '**/Fips*Test.java'
+    ]
+end
 
 # NOTE: to build on Java 11 - installing gems fails (due old jossl) with:
 #  load error: jopenssl/load -- java.lang.StringIndexOutOfBoundsException
@@ -172,6 +179,55 @@ end
 profile :id => 'release' do
   plugin :gpg, '3.1.0' do
     execute_goal :sign, :phase => :verify
+  end
+end
+
+# Run only the strict provider contract against bc-fips, with non-FIPS BC absent.
+profile :id => 'fips-tests' do
+  dependency 'org.bouncycastle', 'bc-fips', '2.0.1', :scope => :test
+  dependency 'org.bouncycastle', 'bcpkix-fips', '2.0.7', :scope => :test
+  dependency 'org.bouncycastle', 'bcutil-fips', '2.0.5', :scope => :test
+  dependency 'org.bouncycastle', 'bctls-fips', '2.0.22', :scope => :test
+
+  properties 'fips.gem.home' => '${basedir}/pkg/rubygems-fips'
+
+  plugin_repository :id => 'mavengems', :url => 'mavengem:https://rubygems.org'
+
+  jruby_plugin :gem, :gemHomes => { 'fips-ruby' => '${fips.gem.home}' } do
+    execute_goal :initialize, :id => 'fips-ruby-test-gems', :phase => 'generate-test-resources'
+    gem 'test-unit', '3.6.7'
+    gem 'power_assert', '2.0.3'
+    gem 'mocha', '1.16.1'
+  end
+
+  plugin! :dependency do
+    execute_goal 'copy-dependencies',
+                 :id => 'fips-copy-bc-fips',
+                 :phase => 'generate-test-resources',
+                 :outputDirectory => '${basedir}/lib',
+                 :useRepositoryLayout => true,
+                 :includeGroupIds => 'org.bouncycastle',
+                 :includeArtifactIds => 'bc-fips,bcpkix-fips,bcutil-fips,bctls-fips'
+  end
+
+  plugin :surefire, '3.5.5' do
+    execute_goal :test, :id => 'default-test', :skip => true
+    execute_goal :test, :id => 'fips-provider-contract',
+      :includes => [
+        '**/FipsProviderContractTest.java',
+        '**/FipsRubyCoverageTest.java'
+      ],
+      :classpathDependencyExcludes => [
+        'org.bouncycastle:bcprov-jdk18on',
+        'org.bouncycastle:bcpkix-jdk18on',
+        'org.bouncycastle:bctls-jdk18on',
+        'org.bouncycastle:bcutil-jdk18on'
+      ],
+      # The regression fixtures intentionally reuse RSA keys for certificate
+      # signing and TLS key exchange.
+      :systemPropertyVariables => {
+        'org.bouncycastle.rsa.allow_multi_use' => 'true'
+      }
   end
 end
 

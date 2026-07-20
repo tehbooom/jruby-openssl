@@ -537,8 +537,7 @@ public class PKeyRSA extends PKey {
         try {
             if (spec != null && passwd != null) {
                 final ASN1ObjectIdentifier cipherOid = osslNameToCipherOid(spec.getOsslName());
-                final OutputEncryptor encryptor = new JcePKCSPBEOutputEncryptorBuilder(cipherOid)
-                        .setProvider(SecurityHelper.getSecurityProvider()).build(passwd);
+                final OutputEncryptor encryptor = newPKCS8EncryptorBuilder(cipherOid).build(passwd);
                 final PKCS8EncryptedPrivateKeyInfo enc = new JcaPKCS8EncryptedPrivateKeyInfoBuilder(privateKey).build(encryptor);
                 return StringHelper.newString(context.runtime, enc.getEncoded());
             }
@@ -567,8 +566,7 @@ public class PKeyRSA extends PKey {
             final StringWriter writer = new StringWriter();
             if (spec != null && passwd != null) {
                 final ASN1ObjectIdentifier cipherOid = osslNameToCipherOid(spec.getOsslName());
-                final OutputEncryptor encryptor = new JcePKCSPBEOutputEncryptorBuilder(cipherOid)
-                        .setProvider(SecurityHelper.getSecurityProvider()).build(passwd);
+                final OutputEncryptor encryptor = newPKCS8EncryptorBuilder(cipherOid).build(passwd);
                 final PKCS8EncryptedPrivateKeyInfo enc = new JcaPKCS8EncryptedPrivateKeyInfoBuilder(privateKey).build(encryptor);
                 PEMInputOutput.writeEncryptedPKCS8PrivateKey(writer, enc.getEncoded());
             } else {
@@ -582,6 +580,17 @@ public class PKeyRSA extends PKey {
         catch (OperatorCreationException | IOException e) {
             throw newRSAError(context.runtime, e.getMessage(), e);
         }
+    }
+
+    private static JcePKCSPBEOutputEncryptorBuilder newPKCS8EncryptorBuilder(
+            final ASN1ObjectIdentifier cipherOid) {
+        final JcePKCSPBEOutputEncryptorBuilder builder =
+                new JcePKCSPBEOutputEncryptorBuilder(cipherOid)
+                        .setProvider(SecurityHelper.getSecurityProvider());
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setRandom(SecurityHelper.getSecureRandom());
+        }
+        return builder;
     }
 
     private static ASN1ObjectIdentifier osslNameToCipherOid(final String osslName) {
@@ -700,6 +709,10 @@ public class PKeyRSA extends PKey {
         if (!opts.isNil()) {
             String paddingMode = Utils.extractStringOpt(context, opts, "rsa_padding_mode", true);
             if ("pss".equalsIgnoreCase(paddingMode)) {
+                if ( SecurityHelper.isRequiredProviderMode() ) {
+                    throw runtime.newNotImplementedError(
+                            "pre-hashed RSA-PSS signing is unsupported under FIPS required-provider mode");
+                }
                 throw runtime.newNotImplementedError("RSA-PSS is not supported for sign_raw");
             }
         }
@@ -732,6 +745,10 @@ public class PKeyRSA extends PKey {
         if (!opts.isNil()) {
             String paddingMode = Utils.extractStringOpt(context, opts, "rsa_padding_mode", true);
             if ("pss".equalsIgnoreCase(paddingMode)) {
+                if ( SecurityHelper.isRequiredProviderMode() ) {
+                    throw runtime.newNotImplementedError(
+                            "pre-hashed RSA-PSS verification is unsupported under FIPS required-provider mode");
+                }
                 throw runtime.newNotImplementedError("RSA-PSS is not supported for verify_raw");
             }
         }
@@ -838,6 +855,10 @@ public class PKeyRSA extends PKey {
             String sym = saltLenArg.asJavaString();
             if ("digest".equals(sym)) saltLen = getDigestLength(digestAlg);
             else if ("max".equals(sym)) saltLen = maxSalt;
+            else if ("auto".equals(sym) && SecurityHelper.isRequiredProviderMode()) {
+                throw runtime.newArgumentError(
+                        "salt_length :auto is unsupported under FIPS required-provider mode");
+            }
             else throw runtime.newArgumentError("unknown salt_length: " + sym);
         } else if (saltLenArg != null && !saltLenArg.isNil()) {
             saltLen = RubyNumeric.fix2int(saltLenArg);
@@ -878,6 +899,9 @@ public class PKeyRSA extends PKey {
                 saltLen = maxPSSSaltLength(digestAlg, publicKey.getModulus().bitLength());
             } else if ("digest".equals(sym)) {
                 saltLen = getDigestLength(digestAlg);
+            } else if ("auto".equals(sym) && SecurityHelper.isRequiredProviderMode()) {
+                throw runtime.newArgumentError(
+                        "salt_length :auto is unsupported under FIPS required-provider mode");
             } else {
                 throw runtime.newArgumentError("unknown salt_length: " + sym);
             }

@@ -170,7 +170,8 @@ public abstract class PEMUtils {
 
         final PEMWriter pemWriter = new PEMWriter(writer);
 
-        final SecureRandom random = CryptoServicesRegistrar.getSecureRandom();
+        final SecureRandom random = SecurityHelper.isRequiredProviderMode() ?
+                SecurityHelper.getSecureRandom() : CryptoServicesRegistrar.getSecureRandom();
 
         pemWriter.writeObject(MiscPEMGeneratorHelper.newGenerator(obj, algorithm, password, random));
         pemWriter.flush();

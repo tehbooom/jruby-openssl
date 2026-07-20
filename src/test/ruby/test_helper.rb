@@ -1,5 +1,7 @@
 require 'java' if defined? JRUBY_VERSION
 
+fips_profile = ENV['JRUBY_OPENSSL_FIPS_TESTS'] == 'true'
+
 if bc_version = ENV['BC_VERSION'] # && respond_to?(:require_jar)
   require 'jar-dependencies'
   require_jar 'org.bouncycastle', 'bcpkix-jdk15on', bc_version
@@ -7,7 +9,7 @@ if bc_version = ENV['BC_VERSION'] # && respond_to?(:require_jar)
   Jars.freeze_loading if defined? Jars.freeze_loading
 
   puts Java::OrgBouncycastleJceProvider::BouncyCastleProvider.new.info if $VERBOSE
-else
+elsif !fips_profile
   base_dir = File.expand_path('../../..', File.dirname(__FILE__))
 
   jar = File.join(base_dir, 'lib/jopenssl.jar')
@@ -65,7 +67,14 @@ puts "#{__FILE__} using #{TestCase}" if $VERBOSE || defined?(REPORT_PATH)
 
 class TestCase
 
-  def setup; require 'openssl' end
+  def fips_test_profile?
+    ENV['JRUBY_OPENSSL_FIPS_TESTS'] == 'true'
+  end
+
+  def setup
+    return if fips_test_profile? && defined?(OpenSSL::BN)
+    require 'openssl'
+  end
 
   alias assert_raise assert_raises unless method_defined?(:assert_raise)
 
@@ -215,9 +224,25 @@ else
 end
 
 if defined? JRUBY_VERSION # make sure our OpenSSL lib gets used not JRuby's
-  unless ENV['BC_VERSION']
+  unless ENV['BC_VERSION'] || fips_profile
     $LOAD_PATH.unshift(File.expand_path('../../../lib', File.dirname(__FILE__)))
   end
+end
+
+if fips_profile
+  # Intercept require 'openssl' before lib/openssl.rb -> jopenssl/load -> openssl/ssl.
+  $LOAD_PATH.unshift(File.expand_path('fips', __dir__))
+
+  require 'jopenssl/version'
+  require 'jopenssl.jar'
+  JRuby::Util.load_ext('org.jruby.ext.openssl.OpenSSL')
+  %w[bn pkey cipher digest hmac x509 pkcs5 config].each { |mod| require "openssl/#{mod}" }
+  require File.expand_path('fips/store_default_paths', __dir__)
+  if ENV['FIPS_RUBY_SUITE'] == 'ssl'
+    require File.expand_path('fips/ssl_bootstrap', __dir__)
+  end
+else
+  require 'jopenssl/load' if defined? JRUBY_VERSION
 end
 
 if ENV['OPENSSL_TEST_SUITE'].to_s == 'true'

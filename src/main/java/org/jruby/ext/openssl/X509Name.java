@@ -71,7 +71,7 @@ import org.bouncycastle.asn1.x500.RDN;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.X500NameBuilder;
 import org.bouncycastle.asn1.x500.style.BCStyle;
-import org.bouncycastle.asn1.x509.X509DefaultEntryConverter;
+import org.bouncycastle.util.encoders.Hex;
 
 import org.jruby.Ruby;
 import org.jruby.RubyArray;
@@ -275,60 +275,76 @@ public class X509Name extends RubyObject {
         this.types.add(type);
     }
 
-    // Lazy-loaded holder — defers loading of X509DefaultEntryConverter (absent from bc-fips)
-    // until an X509Name entry is actually added or converted.
+    // bc-fips omits org.bouncycastle.asn1.x509.X509DefaultEntryConverter; replicate its
+    // OID-aware default conversion with public ASN.1 types (BCStyle + DER*String).
     private static final class BCInternal {
         private BCInternal() {}
 
-        private static final ConverterImpl CONVERTER = new ConverterImpl();
-
         static ASN1Primitive convertValueFor(final ASN1ObjectIdentifier oid, final RubyString value, final int type) {
-            return CONVERTER.convertValueFor(oid, value, type);
+            switch (type) {
+                case ASN1.BIT_STRING:
+                    return new DERBitString(value.getBytes());
+                case ASN1.OCTET_STRING:
+                    return new DEROctetString(value.getBytes());
+                case ASN1.UTF8STRING:
+                    return new DERUTF8String(value.asJavaString());
+                case ASN1.NUMERICSTRING:
+                    return new DERNumericString(value.asJavaString()); // validate?
+                case ASN1.PRINTABLESTRING:
+                    return new DERPrintableString(value.asJavaString());
+                case ASN1.T61STRING:
+                    return new DERT61String(value.asJavaString());
+                case ASN1.VIDEOTEXSTRING:
+                    return new DERVideotexString(value.getBytes());
+                case ASN1.IA5STRING:
+                    return new DERIA5String(value.asJavaString());
+                case ASN1.GENERALIZEDTIME:
+                    return new DERGeneralizedTime(value.asJavaString());
+                case ASN1.UTCTIME:
+                    return new DERUTCTime(value.asJavaString());
+                case ASN1.GRAPHICSTRING:
+                    return new DERGraphicString(value.getBytes());
+                //case ASN1.ISO64STRING:
+                    //return new DERVisibleString(value.asJavaString());
+                case ASN1.GENERALSTRING:
+                    return new DERGeneralString(value.asJavaString());
+                case ASN1.UNIVERSALSTRING:
+                    return new DERUniversalString(value.getBytes());
+                case ASN1.BMPSTRING:
+                    return new DERBMPString(value.asJavaString());
+            }
+
+            return defaultConvertValue(oid, value.toString());
         }
 
         static ASN1Primitive defaultConvertValue(final ASN1ObjectIdentifier oid, final String value) {
-            return new X509DefaultEntryConverter().getConvertedValue(oid, value);
+            String str = value;
+            if (str.length() != 0 && str.charAt(0) == '#') {
+                try {
+                    return convertHexEncoded(str, 1);
+                }
+                catch (IOException e) {
+                    throw new RuntimeException("can't recode value for oid " + oid.getId());
+                }
+            }
+            if (str.length() != 0 && str.charAt(0) == '\\') {
+                str = str.substring(1);
+            }
+            if (oid.equals(BCStyle.EmailAddress) || oid.equals(BCStyle.DC)) {
+                return new DERIA5String(str);
+            }
+            if (oid.equals(BCStyle.DATE_OF_BIRTH)) {
+                return new DERGeneralizedTime(str);
+            }
+            if (oid.equals(BCStyle.C) || oid.equals(BCStyle.SERIALNUMBER)
+                    || oid.equals(BCStyle.DN_QUALIFIER) || oid.equals(BCStyle.TELEPHONE_NUMBER)) {
+                return new DERPrintableString(str);
+            }
+            return new DERUTF8String(str);
         }
 
-        private static class ConverterImpl extends X509DefaultEntryConverter {
-
-            ASN1Primitive convertValueFor(final ASN1ObjectIdentifier oid, final RubyString value, final int type) {
-                switch (type) {
-                    case ASN1.BIT_STRING:
-                        return new DERBitString(value.getBytes());
-                    case ASN1.OCTET_STRING:
-                        return new DEROctetString(value.getBytes());
-                    case ASN1.UTF8STRING:
-                        return new DERUTF8String(value.asJavaString());
-                    case ASN1.NUMERICSTRING:
-                        return new DERNumericString(value.asJavaString()); // validate?
-                    case ASN1.PRINTABLESTRING:
-                        return new DERPrintableString(value.asJavaString());
-                    case ASN1.T61STRING:
-                        return new DERT61String(value.asJavaString());
-                    case ASN1.VIDEOTEXSTRING:
-                        return new DERVideotexString(value.getBytes());
-                    case ASN1.IA5STRING:
-                        return new DERIA5String(value.asJavaString());
-                    case ASN1.GENERALIZEDTIME:
-                        return new DERGeneralizedTime(value.asJavaString());
-                    case ASN1.UTCTIME:
-                        return new DERUTCTime(value.asJavaString());
-                    case ASN1.GRAPHICSTRING:
-                        return new DERGraphicString(value.getBytes());
-                    //case ASN1.ISO64STRING:
-                        //return new DERVisibleString(value.asJavaString());
-                    case ASN1.GENERALSTRING:
-                        return new DERGeneralString(value.asJavaString());
-                    case ASN1.UNIVERSALSTRING:
-                        return new DERUniversalString(value.getBytes());
-                    case ASN1.BMPSTRING:
-                        return new DERBMPString(value.asJavaString());
-                }
-
-                return super.getConvertedValue(oid, value.toString());
-            }
-
+        private static ASN1Primitive convertHexEncoded(final String str, final int off) throws IOException {
+            return ASN1Primitive.fromByteArray(Hex.decodeStrict(str, off, str.length() - off));
         }
     }
 

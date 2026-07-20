@@ -991,7 +991,8 @@ public class PEMInputOutput {
         out.flush();
     }
 
-    public static void writeDSAPrivateKey(Writer _out, DSAPrivateKey obj, CipherSpec cipher, char[] passwd) throws IOException {
+    public static void writeDSAPrivateKey(Writer _out, DSAPrivateKey obj,
+            DSAPublicKey publicKey, CipherSpec cipher, char[] passwd) throws IOException {
         BufferedWriter out = makeBuffered(_out);
         PrivateKeyInfo info = PrivateKeyInfo.getInstance(new ASN1InputStream(getEncoded(obj)).readObject());
         ByteArrayOutputStream bOut = new ByteArrayOutputStream();
@@ -1005,7 +1006,17 @@ public class PEMInputOutput {
         v.add(new ASN1Integer(p.getG()));
 
         BigInteger x = obj.getX();
-        BigInteger y = p.getG().modPow(x, p.getP());
+        final BigInteger y;
+        if (publicKey != null) {
+            y = publicKey.getY();
+        }
+        else if (SecurityHelper.isRequiredProviderMode()) {
+            throw new IOException(
+                    "DSA public key is required; deriving y from x is unavailable");
+        }
+        else {
+            y = p.getG().modPow(x, p.getP());
+        }
 
         v.add(new ASN1Integer(y));
         v.add(new ASN1Integer(x));
@@ -1119,6 +1130,7 @@ public class PEMInputOutput {
     private static SecureRandom random;
 
     private static SecureRandom secureRandom() {
+        if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
         if ( random == null ) {
             random = new SecureRandom();
         }
@@ -1322,7 +1334,7 @@ public class PEMInputOutput {
                 else trust = Collections.emptyList();
 
                 if ( obj instanceof ASN1TaggedObject && ((ASN1TaggedObject) obj).getTagNo() == 0 ) {
-                    final ASN1Sequence rejectSeq = (ASN1Sequence) ((ASN1TaggedObject) obj).getBaseObject().toASN1Primitive();
+                    final ASN1Sequence rejectSeq = (ASN1Sequence) ((ASN1TaggedObject) obj).getLoadedObject();
                     reject = new ArrayList<>(rejectSeq.size());
                     for( int i = 0; i < rejectSeq.size(); i++ ) {
                         reject.add( ((ASN1ObjectIdentifier) rejectSeq.getObjectAt(i)).getId() );
@@ -1347,7 +1359,7 @@ public class PEMInputOutput {
                 else keyid = null;
 
                 if ( obj instanceof ASN1TaggedObject && ((ASN1TaggedObject) obj).getTagNo() == 1 ) {
-                    final ASN1Sequence otherSeq = (ASN1Sequence) ((ASN1TaggedObject) obj).getBaseObject().toASN1Primitive();
+                    final ASN1Sequence otherSeq = (ASN1Sequence) ((ASN1TaggedObject) obj).getLoadedObject();
                     other = new ArrayList<>(otherSeq.size());
                     for( int i = 0; i < otherSeq.size(); i++ ) {
                         other.add( (ASN1Primitive) otherSeq.getObjectAt(i) );

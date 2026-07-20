@@ -224,21 +224,30 @@ public class OCSP {
 
     static JcaContentSignerBuilder newJcaContentSignerBuilder(String alg) {
         JcaContentSignerBuilder builder = new JcaContentSignerBuilder(alg);
-        if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setProvider(SecurityHelper.getSecurityProvider());
+        }
+        else if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
         else builder.setProvider( SecurityHelper.getSecurityProvider() );
         return builder;
     }
 
     static JcaContentVerifierProviderBuilder newJcaContentVerifierProviderBuilder() {
         JcaContentVerifierProviderBuilder builder = new JcaContentVerifierProviderBuilder();
-        if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setProvider(SecurityHelper.getSecurityProvider());
+        }
+        else if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
         else builder.setProvider( SecurityHelper.getSecurityProvider() );
         return builder;
     }
 
     static JcaDigestCalculatorProviderBuilder newJcaDigestCalculatorProviderBuilder() {
         JcaDigestCalculatorProviderBuilder builder = new JcaDigestCalculatorProviderBuilder();
-        if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setProvider(SecurityHelper.getSecurityProvider());
+        }
+        else if (SecurityHelper.isProviderAvailable("BC")) builder.setProvider("BC");
         else builder.setProvider( SecurityHelper.getSecurityProvider() );
         return builder;
     }

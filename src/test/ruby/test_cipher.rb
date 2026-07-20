@@ -489,7 +489,11 @@ class TestCipher < TestCase
     bytes = '0000' * 5
     expected = "f0@\x02\xF6\xA8\xC2\rt\xCC\x83\x8F8e\x19RZ\x8D5\xF8" # from MRI
     actual = cipher.update(bytes)
-    if jruby? # NOTE: ugly but this is as far as JCE gets us :
+    if fips_test_profile?
+      # BCFIPS emits the complete CFB stream from update, matching MRI.
+      assert_equal expected, actual
+      assert_equal "", cipher.final
+    elsif jruby? # NOTE: ugly but this is as far as JCE gets us :
       assert_equal expected[0...16], actual
       # since on Java the padding is handled internally by the Cipher
       # we get :( "Z\x8D5\xF8\x10S|\xB7_R\xA2\x921\x93\x14]"

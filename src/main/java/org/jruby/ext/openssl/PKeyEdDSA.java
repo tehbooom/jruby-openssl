@@ -30,6 +30,7 @@ import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.jcajce.interfaces.EdDSAPrivateKey;
 import org.bouncycastle.jcajce.interfaces.EdDSAPublicKey;
+import org.bouncycastle.jcajce.interfaces.EdDSAKey;
 
 import org.jruby.Ruby;
 import org.jruby.RubyClass;
@@ -248,10 +249,12 @@ public class PKeyEdDSA extends PKey {
     public IRubyObject raw_public_key(ThreadContext context) {
         final Ruby runtime = context.runtime;
         if (publicKey == null) throw newPKeyError(runtime, "public key not set");
-        if (publicKey instanceof EdDSAPublicKey) {
-            return RubyString.newString(runtime, ((EdDSAPublicKey) publicKey).getPointEncoding());
+        try {
+            return RubyString.newString(runtime, rawEdDSAPublicKeyBytes(publicKey));
         }
-        throw newPKeyError(runtime, "cannot extract raw public key");
+        catch (IllegalArgumentException e) {
+            throw newPKeyError(runtime, "cannot extract raw public key");
+        }
     }
 
     @Override
@@ -300,9 +303,51 @@ public class PKeyEdDSA extends PKey {
         }
         if (publicKey instanceof EdDSAPublicKey) {
             sb.append("pub:\n");
-            addSplittedAndFormatted(sb, bytesToHex(((EdDSAPublicKey) publicKey).getPointEncoding()));
+            addSplittedAndFormatted(sb, bytesToHex(rawEdDSAPublicKeyBytes(publicKey)));
         }
         return RubyString.newString(getRuntime(), sb);
+    }
+
+    /**
+     * bc-fips exposes raw bytes on {@link EdDSAKey#getPublicData()}; legacy bcprov
+     * uses {@link EdDSAPublicKey#getPointEncoding()}.
+     */
+    private static byte[] rawEdDSAPublicKeyBytes(final PublicKey publicKey) {
+        if (!(publicKey instanceof EdDSAPublicKey)) {
+            throw new IllegalArgumentException("not an EdDSA public key");
+        }
+        final byte[] fromPublicData = invokePublicKeyBytesMethod(publicKey, "getPublicData");
+        if (fromPublicData != null) return fromPublicData;
+        final byte[] fromPointEncoding = invokePublicKeyBytesMethod(publicKey, "getPointEncoding");
+        if (fromPointEncoding != null) return fromPointEncoding;
+        throw new IllegalArgumentException("cannot extract raw EdDSA public key bytes");
+    }
+
+    private static byte[] invokePublicKeyBytesMethod(final PublicKey key, final String methodName) {
+        for (Class<?> iface : key.getClass().getInterfaces()) {
+            final byte[] bytes = invokePublicKeyBytesMethod(iface, key, methodName);
+            if (bytes != null) return bytes;
+        }
+        for (Class<?> type = key.getClass(); type != null; type = type.getSuperclass()) {
+            final byte[] bytes = invokePublicKeyBytesMethod(type, key, methodName);
+            if (bytes != null) return bytes;
+        }
+        return null;
+    }
+
+    private static byte[] invokePublicKeyBytesMethod(final Class<?> type, final PublicKey key,
+                                                     final String methodName) {
+        try {
+            final java.lang.reflect.Method method = type.getMethod(methodName);
+            if (method.getReturnType() != byte[].class) return null;
+            return (byte[]) method.invoke(key);
+        }
+        catch (NoSuchMethodException e) {
+            return null;
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static StringBuilder bytesToHex(byte[] bytes) {

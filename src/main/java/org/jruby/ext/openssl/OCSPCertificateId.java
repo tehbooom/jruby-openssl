@@ -42,8 +42,8 @@ import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.ocsp.CertificateID;
 import org.bouncycastle.operator.DigestCalculator;
+import org.bouncycastle.operator.DigestCalculatorProvider;
 import org.bouncycastle.operator.OperatorCreationException;
-import org.bouncycastle.operator.bc.BcDigestCalculatorProvider;
 import org.jruby.Ruby;
 import org.jruby.RubyBignum;
 import org.jruby.RubyClass;
@@ -127,9 +127,10 @@ public class OCSPCertificateId extends RubyObject {
         Digest rubyDigest = (Digest) digest;
         ASN1ObjectIdentifier oid = ASN1.sym2Oid(runtime, rubyDigest.getName().toLowerCase());
         AlgorithmIdentifier bcAlgId = new AlgorithmIdentifier(oid);
-        BcDigestCalculatorProvider calculatorProvider = new BcDigestCalculatorProvider();
         DigestCalculator calc;
         try {
+            final DigestCalculatorProvider calculatorProvider =
+                    newJcaDigestCalculatorProviderBuilder().build();
             calc = calculatorProvider.get(bcAlgId);
         }
         catch (OperatorCreationException e) {

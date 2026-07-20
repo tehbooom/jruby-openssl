@@ -125,6 +125,10 @@ public class PKey {
                 final ASN1Encodable parsedDSAKey = keyInfo.parsePrivateKey();
                 if (parsedDSAKey instanceof ASN1Integer) {
                     // PKCS#8 format: private key is just x (INTEGER), params in AlgorithmIdentifier
+                    if (SecurityHelper.isRequiredProviderMode()) {
+                        throw new IOException(
+                                "DSA public key is required; deriving y from x is unavailable");
+                    }
                     final BigInteger xVal = ((ASN1Integer) parsedDSAKey).getValue();
                     final DSAParameter dsaParam = DSAParameter.getInstance(keyInfo.getPrivateKeyAlgorithm().getParameters());
                     final BigInteger pVal = dsaParam.getP();
@@ -325,7 +329,7 @@ public class PKey {
             org.bouncycastle.asn1.sec.ECPrivateKey key = org.bouncycastle.asn1.sec.ECPrivateKey.getInstance(seq);
             AlgorithmIdentifier algId = keyInfo.getPrivateKeyAlgorithm();
             if (algId == null) { // mockPrivateKeyInfo
-                algId = new AlgorithmIdentifier(X9ObjectIdentifiers.id_ecPublicKey, key.getParametersObject().toASN1Primitive());
+                algId = new AlgorithmIdentifier(X9ObjectIdentifiers.id_ecPublicKey, ecPrivateKeyDomainParameters(key));
             }
             final PrivateKeyInfo privInfo = new PrivateKeyInfo(algId, key);
             ECPrivateKey privateKey = (ECPrivateKey) keyFactory.generatePrivate(new PKCS8EncodedKeySpec(privInfo.getEncoded()));
@@ -335,7 +339,7 @@ public class PKey {
 
             // The publicKey field in ECPrivateKey DER is optional (RFC 5915).
             // Keys written by older JRuby-OpenSSL may omit it; handle gracefully.
-            final org.bouncycastle.asn1.ASN1BitString pubKeyBits = key.getPublicKey();
+            final org.bouncycastle.asn1.ASN1BitString pubKeyBits = ecPrivateKeyPublicKeyBits(key);
             if (pubKeyBits == null) return new KeyPair(null, privateKey);
             final SubjectPublicKeyInfo pubInfo = new SubjectPublicKeyInfo(algId, pubKeyBits.getBytes());
             return new KeyPair(keyFactory.generatePublic(new X509EncodedKeySpec(pubInfo.getEncoded())), privateKey);
@@ -346,6 +350,81 @@ public class PKey {
         //catch (Exception ex) {
         //    throw new IOException("problem parsing EC private key: " + ex);
         //}
+    }
+
+    /**
+     * bc-fips 2.0.1 exposes domain parameters via {@code getParameters()}; legacy
+     * bcprov uses {@code getParametersObject()}.
+     */
+    private static ASN1Primitive ecPrivateKeyDomainParameters(final org.bouncycastle.asn1.sec.ECPrivateKey key)
+            throws IOException {
+        try {
+            final java.lang.reflect.Method getParameters = key.getClass().getMethod("getParameters");
+            return (ASN1Primitive) getParameters.invoke(key);
+        }
+        catch (NoSuchMethodException e) {
+            try {
+                final java.lang.reflect.Method getParametersObject = key.getClass().getMethod("getParametersObject");
+                final Object parameters = getParametersObject.invoke(key);
+                if (parameters instanceof ASN1Primitive) {
+                    return (ASN1Primitive) parameters;
+                }
+                return ((org.bouncycastle.asn1.ASN1Object) parameters).toASN1Primitive();
+            }
+            catch (ReflectiveOperationException ex) {
+                throw new IOException("cannot read EC private key domain parameters", ex);
+            }
+        }
+        catch (ReflectiveOperationException ex) {
+            throw new IOException("cannot read EC private key domain parameters", ex);
+        }
+    }
+
+    private static org.bouncycastle.asn1.ASN1BitString ecPrivateKeyPublicKeyBits(
+            final org.bouncycastle.asn1.sec.ECPrivateKey key) {
+        try {
+            final java.lang.reflect.Method getPublicKey = key.getClass().getMethod("getPublicKey");
+            final Object pubKey = getPublicKey.invoke(key);
+            if (pubKey == null) return null;
+            if (pubKey instanceof org.bouncycastle.asn1.ASN1BitString) {
+                return (org.bouncycastle.asn1.ASN1BitString) pubKey;
+            }
+            return org.bouncycastle.asn1.ASN1BitString.getInstance(pubKey);
+        }
+        catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException("cannot read embedded EC public key", ex);
+        }
+    }
+
+    /**
+     * bc-fips 2.0.1 declares the optional-public-key constructor with {@code DERBitString};
+     * legacy bcprov uses {@code ASN1BitString}. Reflection avoids a compile-time signature
+     * that fails at runtime under bc-fips.
+     */
+    public static org.bouncycastle.asn1.sec.ECPrivateKey ecPrivateKeyStructure(
+            final int orderBitLength, final BigInteger s,
+            final byte[] pubKeyBytes, final ASN1Encodable params) throws IOException {
+        if (pubKeyBytes == null) {
+            return new org.bouncycastle.asn1.sec.ECPrivateKey(orderBitLength, s, params);
+        }
+        try {
+            final Class<?> derBitString = Class.forName("org.bouncycastle.asn1.DERBitString");
+            final Object bitString = derBitString.getConstructor(byte[].class).newInstance((Object) pubKeyBytes);
+            try {
+                return org.bouncycastle.asn1.sec.ECPrivateKey.class
+                        .getConstructor(int.class, BigInteger.class, derBitString, ASN1Encodable.class)
+                        .newInstance(orderBitLength, s, bitString, params);
+            }
+            catch (NoSuchMethodException e) {
+                return org.bouncycastle.asn1.sec.ECPrivateKey.class
+                        .getConstructor(int.class, BigInteger.class,
+                                org.bouncycastle.asn1.ASN1BitString.class, ASN1Encodable.class)
+                        .newInstance(orderBitLength, s, bitString, params);
+            }
+        }
+        catch (ReflectiveOperationException ex) {
+            throw new IOException("cannot build EC private key structure", ex);
+        }
     }
 
     public static byte[] toDerRSAKey(RSAPublicKey pubKey, RSAPrivateCrtKey privKey) throws IOException {

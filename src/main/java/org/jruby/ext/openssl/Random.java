@@ -127,6 +127,7 @@ public class Random {
 
         @Override
         java.security.SecureRandom getSecureRandom(ThreadContext context) {
+            if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
             java.security.SecureRandom secureRandom = context.secureRandom;
             if (secureRandom == null) {
                 secureRandom = getSecureRandomImpl();
@@ -225,6 +226,7 @@ public class Random {
 
         @Override
         java.security.SecureRandom getSecureRandom(ThreadContext context) {
+            if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
             // return java.security.SecureRandom.getInstanceStrong(); (on Java 8)
             if (getInstanceStrong == null) return SecurityHelper.getSecureRandom();
             try {

@@ -132,7 +132,8 @@ class TestPKey < TestCase
     assert_kind_of java.security.PublicKey, pkey.to_java(java.security.interfaces.RSAPublicKey)
     assert_kind_of java.security.PublicKey, pkey.to_java(java.security.Key)
     pub_key = pkey.to_java(java.security.PublicKey)
-    if pub_key.is_a? org.bouncycastle.jcajce.provider.asymmetric.rsa.BCRSAPublicKey
+    if !fips_test_profile? &&
+        pub_key.is_a?(org.bouncycastle.jcajce.provider.asymmetric.rsa.BCRSAPublicKey)
       assert_kind_of java.security.PublicKey, pkey.to_java(org.bouncycastle.jcajce.provider.asymmetric.rsa.BCRSAPublicKey)
     end
     assert_raise_kind_of(TypeError) { pkey.to_java(java.security.interfaces.ECPublicKey) }

@@ -930,6 +930,76 @@ public class ASN1 {
 
     } // ObjectId
 
+    private static int taggedObjectTagClass(final ASN1TaggedObject taggedObj) {
+        try {
+            return taggedObj.getEncoded(ASN1Encoding.DER)[0] & 0xC0;
+        }
+        catch (IOException ex) {
+            throw new IllegalArgumentException(ex);
+        }
+    }
+
+    private static ASN1Encodable taggedObjectInner(final ASN1TaggedObject taggedObj) {
+        try {
+            final java.lang.reflect.Method getObject =
+                    ASN1TaggedObject.class.getMethod("getObject");
+            return (ASN1Encodable) getObject.invoke(taggedObj);
+        }
+        catch (NoSuchMethodException e) {
+            ASN1Encodable inner = taggedObj.getLoadedObject();
+            for (int depth = 0; depth < 8 && inner instanceof ASN1TaggedObject; depth++) {
+                final ASN1Encodable next = ((ASN1TaggedObject) inner).getLoadedObject();
+                if (next == inner) break;
+                inner = next;
+            }
+            return inner;
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    private static ASN1Sequence legacyTaggedSequence(final ASN1TaggedObject taggedObj) {
+        try {
+            final Object base = ASN1TaggedObject.class
+                    .getMethod("getBaseUniversal", boolean.class, int.class)
+                    .invoke(taggedObj, false, SEQUENCE);
+            return ASN1Sequence.getInstance(base);
+        }
+        catch (java.lang.reflect.InvocationTargetException e) {
+            final Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+            throw new IllegalArgumentException(cause);
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    private static ASN1Encodable legacyTaggedObjectInner(final ASN1TaggedObject taggedObj) {
+        try {
+            return (ASN1Encodable) ASN1TaggedObject.class.getMethod("getBaseObject").invoke(taggedObj);
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(e);
+        }
+    }
+
+    private static DERTaggedObject newTaggedObject(final boolean explicit, final int tagClass,
+            final int tag, final ASN1Encodable value) {
+        if (tagClass == BERTags.CONTEXT_SPECIFIC) {
+            return new DERTaggedObject(explicit, tag, value);
+        }
+        try {
+            return DERTaggedObject.class
+                    .getConstructor(boolean.class, int.class, int.class, ASN1Encodable.class)
+                    .newInstance(explicit, tagClass, tag, value);
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException("tag class is unsupported by this ASN.1 provider", e);
+        }
+    }
+
     static IRubyObject decodeObject(final ThreadContext context,
         final RubyModule ASN1, final org.bouncycastle.asn1.ASN1Encodable obj)
         throws IOException, IllegalArgumentException {
@@ -951,17 +1021,17 @@ public class ASN1 {
             final Integer typeId = typeId( obj.getClass() );
             String type = typeId == null ? null : (String) ( ASN1_INFO[typeId][2] );
             final ByteList bytes;
-            if ( obj instanceof ASN1UTF8String ) {
+            if ( obj instanceof DERUTF8String ) {
                 if ( type == null ) type = "UTF8String";
-                bytes = new ByteList(((ASN1UTF8String) obj).getString().getBytes(StandardCharsets.UTF_8), false);
+                bytes = new ByteList(((DERUTF8String) obj).getString().getBytes(StandardCharsets.UTF_8), false);
             }
-            else if ( obj instanceof ASN1UniversalString ) {
+            else if ( obj instanceof DERUniversalString ) {
                 if ( type == null ) type = "UniversalString";
-                bytes = new ByteList(((ASN1UniversalString) obj).getOctets(), false);
+                bytes = new ByteList(((DERUniversalString) obj).getOctets(), false);
             }
-            else if ( obj instanceof ASN1BMPString ) {
+            else if ( obj instanceof DERBMPString ) {
                 if ( type == null ) type = "BMPString";
-                final String val = ((ASN1BMPString) obj).getString();
+                final String val = ((DERBMPString) obj).getString();
                 final byte[] valBytes = new byte[val.length() * 2];
                 for (int i = 0; i < val.length(); i++) {
                     char c = val.charAt(i);
@@ -972,28 +1042,28 @@ public class ASN1 {
             }
             else {
                 if ( type == null ) {
-                    if ( obj instanceof ASN1NumericString ) {
+                    if ( obj instanceof DERNumericString ) {
                         type = "NumericString";
                     }
-                    else if ( obj instanceof ASN1PrintableString ) {
+                    else if ( obj instanceof DERPrintableString ) {
                         type = "PrintableString";
                     }
-                    else if ( obj instanceof ASN1IA5String ) {
+                    else if ( obj instanceof DERIA5String ) {
                         type = "IA5String";
                     }
-                    else if ( obj instanceof ASN1T61String ) {
+                    else if ( obj instanceof DERT61String ) {
                         type = "T61String";
                     }
-                    else if ( obj instanceof ASN1GeneralString ) {
+                    else if ( obj instanceof DERGeneralString ) {
                         type = "GeneralString";
                     }
-                    else if ( obj instanceof ASN1VideotexString ) {
+                    else if ( obj instanceof DERVideotexString ) {
                         type = "VideotexString";
                     }
-                    else if ( obj instanceof ASN1VisibleString ) {
+                    else if ( obj instanceof DERVisibleString ) {
                         type = "ISO64String";
                     }
-                    else if ( obj instanceof ASN1GraphicString ) {
+                    else if ( obj instanceof DERGraphicString ) {
                         type = "GraphicString";
                     }
                     else {
@@ -1045,7 +1115,7 @@ public class ASN1 {
             final ASN1TaggedObject taggedObj = (ASN1TaggedObject) obj;
             final IRubyObject tag = runtime.newFixnum(taggedObj.getTagNo());
             final IRubyObject tag_class;
-            switch (taggedObj.getTagClass()) {
+            switch (taggedObjectTagClass(taggedObj)) {
                 case BERTags.PRIVATE:
                     tag_class = runtime.newSymbol("PRIVATE");
                     break;
@@ -1060,13 +1130,41 @@ public class ASN1 {
                     break;
             }
 
+            if (!SecurityHelper.isRequiredProviderMode()) {
+                try {
+                    final RubyArray valArr = decodeObjects(context, ASN1,
+                            legacyTaggedSequence(taggedObj).getObjects());
+                    return ASN1.getClass("ASN1Data").newInstance(context,
+                            new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+                }
+                catch (IllegalStateException | IllegalArgumentException e) {
+                    final IRubyObject val = decodeObject(context, ASN1,
+                            legacyTaggedObjectInner(taggedObj)).callMethod(context, "value");
+                    return ASN1.getClass("ASN1Data").newInstance(context,
+                            new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
+                }
+            }
+
             try {
-                final ASN1Sequence sequence = (ASN1Sequence) taggedObj.getBaseUniversal(false, SEQUENCE);
-                @SuppressWarnings("unchecked")
-                final RubyArray valArr = decodeObjects(context, ASN1, sequence.getObjects());
-                return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
-            } catch (IllegalStateException e) {
-                IRubyObject val = decodeObject(context, ASN1, taggedObj.getBaseObject()).callMethod(context, "value");
+                if ( taggedObj.isExplicit() ) {
+                    final ASN1Sequence sequence = ASN1Sequence.getInstance(taggedObj, true);
+                    @SuppressWarnings("unchecked")
+                    final RubyArray inner = decodeObjects(context, ASN1, sequence.getObjects());
+                    @SuppressWarnings("unchecked")
+                    final RubyArray valArr = context.runtime.newArray();
+                    valArr.append(ASN1.getClass("Sequence").newInstance(context, inner, Block.NULL_BLOCK));
+                    return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { valArr, tag, tag_class }, Block.NULL_BLOCK);
+                }
+                IRubyObject decoded = decodeObject(context, ASN1, taggedObjectInner(taggedObj));
+                IRubyObject innerValue = decoded.callMethod(context, "value");
+                IRubyObject val = innerValue instanceof RubyString || innerValue instanceof RubyArray ?
+                        innerValue : decoded;
+                return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                IRubyObject decoded = decodeObject(context, ASN1, taggedObjectInner(taggedObj));
+                IRubyObject innerValue = decoded.callMethod(context, "value");
+                IRubyObject val = innerValue instanceof RubyString || innerValue instanceof RubyArray ?
+                        innerValue : decoded;
                 return ASN1.getClass("ASN1Data").newInstance(context, new IRubyObject[] { val, tag, tag_class }, Block.NULL_BLOCK);
             }
         }
@@ -1571,20 +1669,20 @@ public class ASN1 {
                 }
 
                 if (values.length() > 0) {
-                    return new DERTaggedObject(isExplicitTagging(), tagClass, tag, new DERGeneralString(values.toString()));
+                    return newTaggedObject(isExplicitTagging(), tagClass, tag, new DERGeneralString(values.toString()));
                 } else {
                     // array of strings as value (default)
-                    return new DERTaggedObject(isExplicitTagging(), tagClass, tag, new BERSequence(vec));
+                    return newTaggedObject(isExplicitTagging(), tagClass, tag, new BERSequence(vec));
                 }
             } else if (value instanceof ASN1Data) {
-                return new DERTaggedObject(isExplicitTagging(), tagClass, tag, ((ASN1Data) value).toASN1(context));
+                return newTaggedObject(isExplicitTagging(), tagClass, tag, ((ASN1Data) value).toASN1(context));
             } else if (value instanceof RubyObject) {
                 if (isEOC(context)) {
                     return null;
                 }
                 final IRubyObject string = value.checkStringType();
                 if (string instanceof RubyString) {
-                    return new DERTaggedObject(isExplicitTagging(), tagClass, tag,
+                    return newTaggedObject(isExplicitTagging(), tagClass, tag,
                             new DERGeneralString(string.asJavaString()));
                 } else {
                     throw context.runtime.newTypeError(
@@ -2008,7 +2106,7 @@ public class ASN1 {
         ASN1Encodable toASN1(final ThreadContext context) {
             final ASN1Encodable primitive = toASN1Primitive(context);
             if (isTagged()) {
-                return new DERTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), primitive);
+                return newTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), primitive);
             }
             return primitive;
         }
@@ -2195,14 +2293,14 @@ public class ASN1 {
             if ( isSequence() ) {
                 final ASN1Encodable seq = new DERSequence( toASN1EncodableVector(context) );
                 if ( isTagged() ) {
-                    return new DERTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), seq);
+                    return newTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), seq);
                 }
                 return seq;
             }
             if ( isSet() ) {
                 final ASN1Encodable set = new DLSet( toASN1EncodableVector(context) );
                 if ( isTagged() ) {
-                    return new DERTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), set);
+                    return newTaggedObject(isExplicitTagging(), getTagClass(context), getTag(context), set);
                 }
                 return set;
             }

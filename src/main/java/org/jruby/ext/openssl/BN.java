@@ -498,6 +498,8 @@ public class BN extends RubyObject {
         }
     }
 
+    // Raw BN inverse, modexp, and prime operations intentionally remain
+    // out-of-module general arithmetic, not a FIPS-validated crypto service.
     @JRubyMethod(name="mod_inverse")
     public BN mod_inverse(final ThreadContext context, IRubyObject other) {
         try {
@@ -884,6 +886,7 @@ public class BN extends RubyObject {
     private static SecureRandom secureRandom;
 
     private static SecureRandom getSecureRandom() {
+        if ( SecurityHelper.isRequiredProviderMode() ) return SecurityHelper.getSecureRandom();
         final SecureRandom rnd;
         if ( ( rnd = BN.secureRandom ) != null ) {
             return rnd;

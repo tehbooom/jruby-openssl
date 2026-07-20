@@ -3,6 +3,7 @@ package org.jruby.ext.openssl.impl.pem;
 import org.bouncycastle.openssl.EncryptionException;
 import org.bouncycastle.openssl.MiscPEMGenerator;
 import org.bouncycastle.openssl.PEMEncryptor;
+import org.jruby.ext.openssl.SecurityHelper;
 
 import java.security.SecureRandom;
 
@@ -21,7 +22,10 @@ public abstract class MiscPEMGeneratorHelper {
 
         int ivLength = algorithm.toUpperCase().startsWith("AES-") ? 16 : 8;
         final byte[] iv = new byte[ivLength];
-        ( random == null ? new SecureRandom() : random ).nextBytes(iv);
+        ( random == null ?
+                ( SecurityHelper.isRequiredProviderMode() ?
+                        SecurityHelper.getSecureRandom() : new SecureRandom() ) :
+                random ).nextBytes(iv);
 
         return new PEMEncryptor() {
             public String getAlgorithm() { return algorithm; }

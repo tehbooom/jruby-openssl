@@ -32,23 +32,22 @@ import java.io.OutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
-import java.security.spec.KeySpec;
-import java.security.spec.RSAPublicKeySpec;
-import java.security.spec.DSAPublicKeySpec;
 import java.security.spec.InvalidKeySpecException;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Enumeration;
 
+import org.bouncycastle.asn1.ASN1Encodable;
+import org.bouncycastle.asn1.ASN1Encoding;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.ASN1Set;
-import org.bouncycastle.asn1.DERBitString;
+import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.DLSequence;
 import org.bouncycastle.asn1.pkcs.CertificationRequestInfo;
@@ -61,15 +60,6 @@ import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.asn1.pkcs.CertificationRequest;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.asn1.pkcs.Attribute;
-import org.bouncycastle.crypto.util.PublicKeyFactory;
-import org.bouncycastle.crypto.params.AsymmetricKeyParameter;
-import org.bouncycastle.crypto.params.DSAPublicKeyParameters;
-import org.bouncycastle.crypto.params.DSAParameters;
-import org.bouncycastle.crypto.params.ECDomainParameters;
-import org.bouncycastle.crypto.params.ECPublicKeyParameters;
-import org.bouncycastle.crypto.params.RSAKeyParameters;
-import org.bouncycastle.jce.spec.ECParameterSpec;
-import org.bouncycastle.jce.spec.ECPublicKeySpec;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.ContentVerifier;
 import org.bouncycastle.operator.ContentVerifierProvider;
@@ -122,7 +112,9 @@ public class PKCS10Request {
         CertificationRequest req = signedRequest.toASN1Structure();
         CertificationRequestInfo reqInfo = new CertificationRequestInfo(subject, publicKeyInfo, toAttributesSet());
         ASN1Sequence seq = (ASN1Sequence) req.toASN1Primitive();
-        req = new CertificationRequest(reqInfo, (AlgorithmIdentifier) seq.getObjectAt(1), (DERBitString) seq.getObjectAt(2));
+        req = new CertificationRequest(new DERSequence(new ASN1Encodable[] {
+                reqInfo, seq.getObjectAt(1), seq.getObjectAt(2)
+        }));
         signedRequest = new PKCS10CertificationRequest(req); // valid = true;
     }
 
@@ -244,44 +236,24 @@ public class PKCS10Request {
     public PublicKey generatePublicKey() throws NoSuchAlgorithmException,
         InvalidKeySpecException, IOException {
 
-        AsymmetricKeyParameter keyParams = PublicKeyFactory.createKey(publicKeyInfo);
+        if ( publicKeyInfo == null ) return null;
 
-        final KeySpec keySpec; final KeyFactory keyFactory;
-
-        if ( keyParams instanceof RSAKeyParameters ) {
-            RSAKeyParameters rsa = (RSAKeyParameters) keyParams;
-            keySpec = new RSAPublicKeySpec(
-                rsa.getModulus(), rsa.getExponent()
-            );
-            keyFactory = SecurityHelper.getKeyFactory("RSA");
-            return keyFactory.generatePublic(keySpec);
-
+        final byte[] encoded = publicKeyInfo.getEncoded(ASN1Encoding.DER);
+        final ASN1ObjectIdentifier algOid = publicKeyInfo.getAlgorithm().getAlgorithm();
+        final String alg;
+        if ( PKCSObjectIdentifiers.rsaEncryption.equals(algOid) ) {
+            alg = "RSA";
         }
-        else if ( keyParams instanceof DSAPublicKeyParameters ) {
-            DSAPublicKeyParameters dsa = (DSAPublicKeyParameters) keyParams;
-            DSAParameters params = dsa.getParameters();
-            keySpec = new DSAPublicKeySpec(
-                dsa.getY(), params.getP(), params.getQ(), params.getG()
-            );
-            keyFactory = SecurityHelper.getKeyFactory("DSA");
-            return keyFactory.generatePublic(keySpec);
+        else if ( X9ObjectIdentifiers.id_ecPublicKey.equals(algOid) ) {
+            alg = "EC";
         }
-        else if ( keyParams instanceof ECPublicKeyParameters ) {
-            ECPublicKeyParameters ec = (ECPublicKeyParameters) keyParams;
-            ECDomainParameters ecParams = ec.getParameters();
-            ECParameterSpec params = new ECParameterSpec(
-                    ecParams.getCurve(),
-                    ecParams.getG(), ecParams.getN(), ecParams.getH(),
-                    ecParams.getSeed()
-            );
-            // NOTE: likely to fail if non BC factory picked up :
-            keySpec = new ECPublicKeySpec(ec.getQ(), params);
-            keyFactory = SecurityHelper.getKeyFactory("EC");
-            return keyFactory.generatePublic(keySpec);
+        else if ( X9ObjectIdentifiers.id_dsa.equals(algOid) ) {
+            alg = "DSA";
         }
         else {
-            throw new IllegalStateException("could not generate public key for request, params type: " + keyParams);
+            throw new IllegalStateException("could not generate public key for request, oid: " + algOid.getId());
         }
+        return SecurityHelper.getKeyFactory(alg).generatePublic(new X509EncodedKeySpec(encoded));
     }
 
     public Attribute[] getAttributes() {

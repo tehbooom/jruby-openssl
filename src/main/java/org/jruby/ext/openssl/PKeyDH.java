@@ -30,15 +30,24 @@ package org.jruby.ext.openssl;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Proxy;
 import java.math.BigInteger;
+import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.HashMap;
 
 import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
 import java.security.spec.InvalidKeySpecException;
+import javax.crypto.KeyAgreement;
+import javax.crypto.interfaces.DHPrivateKey;
+import javax.crypto.interfaces.DHPublicKey;
 import javax.crypto.spec.DHParameterSpec;
 import javax.crypto.spec.DHPrivateKeySpec;
 import javax.crypto.spec.DHPublicKeySpec;
@@ -88,6 +97,10 @@ public class PKeyDH extends PKey {
 
     public static RaiseException newDHError(Ruby runtime, String message) {
         return Utils.newError(runtime, _PKey(runtime).getClass("DHError"), message);
+    }
+
+    public static RaiseException newDHError(Ruby runtime, String message, Exception cause) {
+        return Utils.newError(runtime, _PKey(runtime).getClass("DHError"), message, cause);
     }
 
     // transient because: we do not want these value serialized (insecure)
@@ -194,6 +207,11 @@ public class PKeyDH extends PKey {
     }
 
     private void generate(final Ruby runtime, final IRubyObject bits, final int gval) {
+        if (SecurityHelper.isRequiredProviderMode()) {
+            generateWithProvider(runtime, RubyNumeric.num2int(bits), gval);
+            return;
+        }
+
         BigInteger p;
         try {
             p = generateP(RubyNumeric.num2int(bits), gval);
@@ -208,6 +226,86 @@ public class PKeyDH extends PKey {
         this.dh_g = g;
         this.dh_x = x; // private key
         this.dh_y = y; // public key
+    }
+
+    private void generateWithProvider(final Ruby runtime, final int bits, final int requestedG) {
+        if (bits < 2) throw runtime.newArgumentError("invalid bit length");
+        if (requestedG < 2) throw runtime.newArgumentError("invalid generator");
+
+        try {
+            final KeyPairGenerator generator = SecurityHelper.getKeyPairGenerator("DH");
+            generator.initialize(namedGroupForSize(bits), SecurityHelper.getSecureRandom());
+            final KeyPair pair = generator.generateKeyPair();
+            populateFromKeyPair(pair);
+            if (!dh_g.equals(BigInteger.valueOf(requestedG))) {
+                throw runtime.newArgumentError(
+                        "configured provider selected generator " + dh_g +
+                        "; requested generator " + requestedG + " was not honored");
+            }
+        }
+        catch (RaiseException e) {
+            throw e;
+        }
+        catch (Exception e) {
+            throw newDHError(runtime, "can't generate DH key: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Selects the provider's approved FFDHE group by size. Java 11 exposes
+     * NamedParameterSpec directly; the reflective bc-fips index keeps the same
+     * provider-owned selection available on Java 8.
+     */
+    private static AlgorithmParameterSpec namedGroupForSize(final int bits) throws Exception {
+        final String name = "ffdhe" + bits;
+        try {
+            final Class<?> namedSpec = Class.forName("java.security.spec.NamedParameterSpec");
+            final Constructor<?> constructor = namedSpec.getConstructor(String.class);
+            return (AlgorithmParameterSpec) constructor.newInstance(name);
+        }
+        catch (ClassNotFoundException e) {
+            return bcFipsNamedGroup(name);
+        }
+    }
+
+    private static DHParameterSpec bcFipsNamedGroup(final String name) throws Exception {
+        final ClassLoader loader = SecurityHelper.getSecurityProvider().getClass().getClassLoader();
+        final Class<?> idClass = Class.forName(
+                "org.bouncycastle.crypto.asymmetric.DHDomainParametersID", true, loader);
+        final Object id = Proxy.newProxyInstance(loader, new Class<?>[] { idClass },
+                (proxy, method, args) -> {
+                    if ("getName".equals(method.getName())) return name;
+                    if ("toString".equals(method.getName())) return name;
+                    if ("hashCode".equals(method.getName())) return name.hashCode();
+                    if ("equals".equals(method.getName())) return proxy == args[0];
+                    return null;
+                });
+        final Class<?> indexClass = Class.forName(
+                "org.bouncycastle.crypto.asymmetric.DHDomainParametersIndex", true, loader);
+        final Object parameters = indexClass
+                .getMethod("lookupDomainParameters", idClass).invoke(null, id);
+        if (parameters == null) {
+            throw new GeneralSecurityException(
+                    "configured provider has no approved named DH group " + name);
+        }
+        final BigInteger p = (BigInteger) parameters.getClass().getMethod("getP").invoke(parameters);
+        final BigInteger g = (BigInteger) parameters.getClass().getMethod("getG").invoke(parameters);
+        return new DHParameterSpec(p, g);
+    }
+
+    private void populateFromKeyPair(final KeyPair pair) throws GeneralSecurityException {
+        if (!(pair.getPublic() instanceof DHPublicKey) ||
+                !(pair.getPrivate() instanceof DHPrivateKey)) {
+            throw new GeneralSecurityException(
+                    "configured provider returned non-DH key material");
+        }
+        final DHPublicKey publicKey = (DHPublicKey) pair.getPublic();
+        final DHPrivateKey privateKey = (DHPrivateKey) pair.getPrivate();
+        final DHParameterSpec parameters = publicKey.getParams();
+        this.dh_p = parameters.getP();
+        this.dh_g = parameters.getG();
+        this.dh_y = publicKey.getY();
+        this.dh_x = privateKey.getX();
     }
 
     public static BigInteger generateP(int bits, int g) {
@@ -238,7 +336,8 @@ public class PKeyDH extends PKey {
         if (limit < 0) throw new IllegalArgumentException("invalid limit");
 
         BigInteger x;
-        SecureRandom secureRandom = new SecureRandom();
+        SecureRandom secureRandom = SecurityHelper.isRequiredProviderMode() ?
+                SecurityHelper.getSecureRandom() : new SecureRandom();
         // adapting algorithm from org.bouncycastle.crypto.generators.DHKeyGeneratorHelper,
         // see also [ossl]/crypto/dh/dh_key.c #generate_key
         if (limit == 0) {
@@ -269,6 +368,17 @@ public class PKeyDH extends PKey {
         if ((p = this.dh_p) == null || (g = this.dh_g) == null) {
             throw newDHError(getRuntime(), "can't generate key");
         }
+        if (SecurityHelper.isRequiredProviderMode()) {
+            try {
+                final KeyPairGenerator generator = SecurityHelper.getKeyPairGenerator("DH");
+                generator.initialize(new DHParameterSpec(p, g), SecurityHelper.getSecureRandom());
+                populateFromKeyPair(generator.generateKeyPair());
+                return this;
+            }
+            catch (Exception e) {
+                throw newDHError(getRuntime(), "can't generate key: " + e.getMessage(), e);
+            }
+        }
         if ((x = this.dh_x) == null) {
             x = generateX(p);
         }
@@ -291,11 +401,40 @@ public class PKeyDH extends PKey {
         if ((plen = p.bitLength()) == 0 || plen > OPENSSL_DH_MAX_MODULUS_BITS) {
             throw newDHError(getRuntime(), "can't compute key");
         }
-        return getRuntime().newString(new ByteList(computeKey(y, x, p), false));
+        final byte[] secret;
+        if (SecurityHelper.isRequiredProviderMode()) {
+            secret = computeKeyWithProvider(y);
+        }
+        else {
+            secret = computeKey(y, x, p);
+        }
+        return getRuntime().newString(new ByteList(secret, false));
     }
 
     public static byte[] computeKey(BigInteger y, BigInteger x, BigInteger p) {
         return BN.toUnsignedBytes(y.modPow(x, p));
+    }
+
+    private byte[] computeKeyWithProvider(final BigInteger peerY) {
+        try {
+            final KeyAgreement agreement = SecurityHelper.getKeyAgreement("DH");
+            agreement.init(getPrivateKey());
+            agreement.doPhase(getKeyFactory().generatePublic(
+                    new DHPublicKeySpec(peerY, dh_p, dh_g)), true);
+            return stripLeadingZeroes(agreement.generateSecret());
+        }
+        catch (Exception e) {
+            throw newDHError(getRuntime(), "can't compute key: " + e.getMessage(), e);
+        }
+    }
+
+    private static byte[] stripLeadingZeroes(final byte[] secret) {
+        int offset = 0;
+        while (offset < secret.length - 1 && secret[offset] == 0) offset++;
+        if (offset == 0) return secret;
+        final byte[] stripped = new byte[secret.length - offset];
+        System.arraycopy(secret, offset, stripped, 0, stripped.length);
+        return stripped;
     }
 
     /**
@@ -318,7 +457,8 @@ public class PKeyDH extends PKey {
         if (peerY == null) {
             throw newPKeyError(context.runtime, "EVP_PKEY_derive_set_peer");
         }
-        final byte[] secret = computeKey(peerY, x, p);
+        final byte[] secret = SecurityHelper.isRequiredProviderMode() ?
+                computeKeyWithProvider(peerY) : computeKey(peerY, x, p);
         return context.runtime.newString(new ByteList(secret, false));
     }
 

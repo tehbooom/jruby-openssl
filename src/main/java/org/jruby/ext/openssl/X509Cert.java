@@ -35,8 +35,10 @@ import java.math.BigInteger;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
+import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SignatureException;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
@@ -68,10 +70,11 @@ import org.bouncycastle.asn1.x509.GeneralNames;
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
 import org.bouncycastle.asn1.x509.TBSCertificate;
 import org.bouncycastle.asn1.x509.Time;
-import org.bouncycastle.asn1.x509.Validity;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.joda.time.DateTime;
@@ -384,22 +387,24 @@ public class X509Cert extends RubyObject {
 
         final int version = this.version == null ? 0 : RubyNumeric.fix2int(this.version);
         final ASN1EncodableVector vec = new ASN1EncodableVector(10);
-        if ( version != 0 ) vec.add(new DERTaggedObject(true, 0, new ASN1Integer(version)));
+        if ( version != 0 ) vec.add(new DERTaggedObject(true, 0, new ASN1Integer(BigInteger.valueOf(version))));
         vec.add(new ASN1Integer(serial));
         vec.add(certTBS.getSignature());
         vec.add(issuer == null ? certTBS.getIssuer() : ((X509Name) issuer).getX500Name());
-        vec.add(new Validity(
-            new Time(not_before != null ? not_before.getJavaDate() : new Date(0)),
-            new Time(not_after != null ? not_after.getJavaDate() : new Date(0)))
-        );
+        final ASN1EncodableVector validity = new ASN1EncodableVector(2);
+        validity.add(new Time(not_before != null ? not_before.getJavaDate() : new Date(0)));
+        validity.add(new Time(not_after != null ? not_after.getJavaDate() : new Date(0)));
+        vec.add(new DLSequence(validity));
         vec.add(subject == null ? certTBS.getSubject() : ((X509Name) subject).getX500Name());
         vec.add(publicKeyInfo);
 
-        if ( certTBS.getIssuerUniqueId() != null ) {
-            vec.add(new DERTaggedObject(false, 1, certTBS.getIssuerUniqueId()));
+        final ASN1Encodable issuerUniqueId = tbsOptionalComponent(certTBS, "getIssuerUniqueId");
+        if ( issuerUniqueId != null ) {
+            vec.add(new DERTaggedObject(false, 1, issuerUniqueId));
         }
-        if ( certTBS.getSubjectUniqueId() != null ) {
-            vec.add(new DERTaggedObject(false, 2, certTBS.getSubjectUniqueId()));
+        final ASN1Encodable subjectUniqueId = tbsOptionalComponent(certTBS, "getSubjectUniqueId");
+        if ( subjectUniqueId != null ) {
+            vec.add(new DERTaggedObject(false, 2, subjectUniqueId));
         }
         if ( extensions.size() > 0 ) {
             final ASN1EncodableVector extVec = new ASN1EncodableVector(extensions.size());
@@ -408,6 +413,16 @@ public class X509Cert extends RubyObject {
         }
 
         return new DLSequence(vec).getEncoded(ASN1Encoding.DER);
+    }
+
+    private static ASN1Encodable tbsOptionalComponent(final TBSCertificate tbs, final String getter) {
+        try {
+            final java.lang.reflect.Method method = tbs.getClass().getMethod(getter);
+            return (ASN1Encodable) method.invoke(tbs);
+        }
+        catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Override
@@ -729,9 +744,7 @@ public class X509Cert extends RubyObject {
         final String signatureAlg = (digAlg == null) ? keyAlg : digAlg + "WITH" + keyAlg;
         final X509CertificateHolder certHolder;
         try {
-            ContentSigner signer =
-                    new JcaContentSignerBuilder(signatureAlg).
-                            build(((PKey) key).getPrivateKey());
+            ContentSigner signer = newContentSigner((PKey) key, signatureAlg);
             certHolder = builder.build(signer);
         } catch (OperatorCreationException e) {
             Exception cause = (Exception) e.getCause(); // GeneralSecurityException
@@ -757,6 +770,19 @@ public class X509Cert extends RubyObject {
         this.sig_alg = runtime.newString(name);
         this.changed = false;
         return this;
+    }
+
+    static JcaContentSignerBuilder newJcaContentSignerBuilder(final String algorithm) {
+        final JcaContentSignerBuilder builder = new JcaContentSignerBuilder(algorithm);
+        if (SecurityHelper.isRequiredProviderMode()) {
+            builder.setProvider(SecurityHelper.getSecurityProvider());
+        }
+        return builder;
+    }
+
+    private static ContentSigner newContentSigner(final PKey key, final String signatureAlg)
+            throws OperatorCreationException {
+        return newJcaContentSignerBuilder(signatureAlg).build(key.getPrivateKey());
     }
 
     private X509v3CertificateBuilder newCertificateBuilder() {

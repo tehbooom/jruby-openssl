@@ -157,18 +157,8 @@ public class EncContent {
         ec.setContentType( ASN1Registry.oid2nid(contentType) );
         ec.setAlgorithm(AlgorithmIdentifier.getInstance(sequence.getObjectAt(1)));
         if(sequence.size() > 2 && sequence.getObjectAt(2) instanceof ASN1TaggedObject && ((ASN1TaggedObject)(sequence.getObjectAt(2))).getTagNo() == 0) {
-            ASN1Encodable ee = ((ASN1TaggedObject)(sequence.getObjectAt(2))).getBaseObject().toASN1Primitive();
-            if ( ee instanceof ASN1Sequence && ((ASN1Sequence) ee).size() > 0 ) {
-                ByteList combinedOctets = new ByteList();
-                Enumeration enm = ((ASN1Sequence)ee).getObjects();
-                while (enm.hasMoreElements()) {
-                    byte[] octets = ((ASN1OctetString)enm.nextElement()).getOctets();
-                    combinedOctets.append(octets);
-                }
-                ec.setEncData(new DEROctetString(combinedOctets.bytes()));
-            } else {
-                ec.setEncData((ASN1OctetString)ee);
-            }
+            ec.setEncData(ASN1OctetString.getInstance(
+                    (ASN1TaggedObject) sequence.getObjectAt(2), false));
         }
         return ec;
     }

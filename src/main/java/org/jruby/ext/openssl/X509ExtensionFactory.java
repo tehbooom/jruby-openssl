@@ -212,7 +212,7 @@ public class X509ExtensionFactory extends RubyObject {
                 value = parseAuthorityInfoAccess(valuex);
             }
             else if (isNetscapeIA5StringExtension(id)) {
-                value = new DEROctetString(new DERIA5String(valuex).getEncoded(ASN1Encoding.DER));
+                value = new DERIA5String(valuex);
             }
             else {
                 value = new DEROctetString(new DEROctetString(ByteList.plain(valuex)).getEncoded(ASN1Encoding.DER));
