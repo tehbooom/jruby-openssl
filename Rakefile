@@ -28,6 +28,32 @@ task :default => :build
 
 file('lib/jopenssl.jar') { Rake::Task['jar'].invoke }
 
+namespace :package do
+  task :prepare do
+    rm_f Dir.glob('lib/*.jar')
+    sh( './mvnw clean package -Dmaven.test.skip=true' )
+  end
+
+  desc "Build the normal gem with Bouncy Castle jars"
+  task :normal => :prepare do
+    spec = Gem::Specification.load('jruby-openssl.gemspec')
+    mkdir_p 'pkg'
+    sh 'gem', 'build', 'jruby-openssl.gemspec',
+       '--output', "pkg/#{spec.full_name}.gem"
+  end
+
+  desc "Build the FIPS gem without any Bouncy Castle jars"
+  task :fips => :prepare do
+    spec = Gem::Specification.load('jruby-openssl-fips.gemspec.rb')
+    mkdir_p 'pkg'
+    sh 'gem', 'build', 'jruby-openssl-fips.gemspec.rb',
+       '--output', "pkg/#{spec.full_name}.gem"
+  end
+
+  desc "Build normal and FIPS gems from the shared source"
+  task :gems => [:normal, :fips]
+end
+
 require 'rake/testtask'
 Rake::TestTask.new do |task|
   task.libs << File.expand_path('src/test/ruby', File.dirname(__FILE__))

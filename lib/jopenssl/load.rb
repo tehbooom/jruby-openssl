@@ -1,7 +1,28 @@
 require 'jopenssl/version'
 
-# NOTE: assuming user does pull in BC .jars from somewhere else on the CP
-unless ENV_JAVA['jruby.openssl.load.jars'].eql?('false')
+fips_artifact = defined?(Gem) && Gem.loaded_specs.key?('jruby-openssl-fips')
+
+if fips_artifact
+  required_fips_classes = {
+    'bc-fips 2.0.1' => 'org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider',
+    'bcpkix-fips 2.0.7' => 'org.bouncycastle.operator.jcajce.JcaContentSignerBuilder',
+    'bctls-fips 2.0.22' => 'org.bouncycastle.jsse.provider.BouncyCastleJsseProvider',
+    'bcutil-fips 2.0.5' => 'org.bouncycastle.asn1.cms.CMSObjectIdentifiers'
+  }
+  missing_fips_jars = required_fips_classes.each_with_object([]) do |(jar, class_name), missing|
+    begin
+      Java::JavaLang::Class.forName(class_name)
+    rescue Java::JavaLang::ClassNotFoundException
+      missing << jar
+    end
+  end
+  unless missing_fips_jars.empty?
+    raise LoadError, "jruby-openssl-fips bundles no Bouncy Castle jars; provide the " \
+      "Bouncy Castle FIPS jars on the JVM classpath (tested set: bc-fips 2.0.1, " \
+      "bcpkix-fips 2.0.7, bctls-fips 2.0.22, bcutil-fips 2.0.5). " \
+      "Missing: #{missing_fips_jars.join(', ')}"
+  end
+elsif !ENV_JAVA['jruby.openssl.load.jars'].eql?('false')
   version = JOpenSSL::BOUNCY_CASTLE_VERSION
   begin
     require 'jar-dependencies'
