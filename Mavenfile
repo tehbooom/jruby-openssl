@@ -191,7 +191,7 @@ profile :id => 'fips-tests' do
   dependency 'org.bouncycastle', 'bctls-fips', '2.0.22', :scope => :test
 
   properties 'fips.gem.home' => '${basedir}/pkg/rubygems-fips',
-             'test' => 'FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,Group1PemBehaviorTest,Group4BehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud'
+             'test' => 'FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,Group1PemBehaviorTest,Group4BehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud,SecurityHelperTest#missingRequiredProviderFailsLoud,SecurityHelperTest#requiredProviderNeverFallsBackForUnsupportedAlgorithm,SecurityHelperTest#requiredProviderNeverFallsBackForKeyStore,SecurityHelperTest#requiredProvidersNeverFallbackAcrossWrapperAudit,SecurityHelperTest#requiredSslProviderRoutesByRegisteredNameAndFailsAfterRemoval,SecurityHelperTest#requiredSslProviderNeverFallsBackForUnsupportedProtocol,SecurityHelperTest#strictJceWithoutRequiredSslProviderFailsLoud,SecurityHelperTest#strictLegacyBcjsseLookupNeverConstructsUnregisteredProvider,SecurityHelperTest#missingRequiredSslProviderFailsBeforeLegacyInstantiation'
 
   plugin_repository :id => 'mavengems', :url => 'mavengem:https://rubygems.org'
 
