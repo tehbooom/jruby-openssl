@@ -10,13 +10,17 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.Provider;
 import java.security.SecureRandom;
@@ -80,6 +84,65 @@ public class FipsProviderContractTest {
     private static void assertConfigured(final String operation, final Provider actual) {
         assertEquals(configuredProvider.getName(), actual.getName(), operation);
         System.out.println(operation + " provider=" + actual.getName());
+    }
+
+    @Test
+    void setDefaultPathsHonorsConfiguredBcfksTrustStore() throws Exception {
+        final Path trustStore = Files.createTempFile("jruby-openssl-fips-truststore", ".bcfks");
+        final char[] password = "changeit".toCharArray();
+        final String[] properties = {
+                "javax.net.ssl.trustStore",
+                "javax.net.ssl.trustStoreType",
+                "javax.net.ssl.trustStoreProvider",
+                "javax.net.ssl.trustStorePassword"
+        };
+        final String[] previousValues = new String[properties.length];
+        Ruby runtime = null;
+
+        try {
+            final X509Certificate certificate;
+            try (FileInputStream input = new FileInputStream("src/test/ruby/x509/ec-ca.crt")) {
+                certificate = (X509Certificate)
+                        SecurityHelper.getCertificateFactory("X.509").generateCertificate(input);
+            }
+
+            final KeyStore bcfks = KeyStore.getInstance("BCFKS", configuredProvider);
+            bcfks.load(null, password);
+            bcfks.setCertificateEntry("synthetic-ca", certificate);
+            try (FileOutputStream output = new FileOutputStream(trustStore.toFile())) {
+                bcfks.store(output, password);
+            }
+
+            for (int i = 0; i < properties.length; i++) {
+                previousValues[i] = System.getProperty(properties[i]);
+            }
+            System.setProperty("javax.net.ssl.trustStore", trustStore.toString());
+            System.setProperty("javax.net.ssl.trustStoreType", "BCFKS");
+            System.setProperty("javax.net.ssl.trustStoreProvider", configuredProvider.getName());
+            System.setProperty("javax.net.ssl.trustStorePassword", new String(password));
+
+            runtime = Ruby.newInstance();
+            OpenSSL.createOpenSSL(runtime);
+            runtime.evalScriptlet(
+                    "ENV.delete('SSL_CERT_FILE')\n" +
+                    "certificate = OpenSSL::X509::Certificate.new(" +
+                    "File.binread('src/test/ruby/x509/ec-ca.crt'))\n" +
+                    "store = OpenSSL::X509::Store.new\n" +
+                    "store.set_default_paths\n" +
+                    "raise 'configured BCFKS trust anchor was not loaded' unless store.verify(certificate)\n");
+        }
+        finally {
+            if (runtime != null) runtime.tearDown(false);
+            for (int i = 0; i < properties.length; i++) {
+                if (previousValues[i] == null) {
+                    System.clearProperty(properties[i]);
+                }
+                else {
+                    System.setProperty(properties[i], previousValues[i]);
+                }
+            }
+            Files.deleteIfExists(trustStore);
+        }
     }
 
     private static Signature contentSignerSignature(final ContentSigner signer) throws Exception {
