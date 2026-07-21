@@ -36,6 +36,7 @@ import java.io.InputStreamReader;
 import java.math.BigInteger;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.cert.CRL;
 import java.security.cert.CertificateException;
 import java.security.cert.PKIXParameters;
@@ -331,14 +332,38 @@ public class Lookup {
     }
 
     public int loadDefaultJavaCACertsFile(String certsFile) throws IOException, GeneralSecurityException {
+        final String trustStore = SafePropertyAccessor.getProperty("javax.net.ssl.trustStore");
+        final boolean configuredTrustStore = trustStore != null;
+        if ( configuredTrustStore ) {
+            certsFile = trustStore;
+        }
+        else if ( SecurityHelper.isRequiredProviderMode() ) {
+            return 0;
+        }
+
+        final String type = configuredTrustStore ?
+                SafePropertyAccessor.getProperty("javax.net.ssl.trustStoreType", "PKCS12") : "JKS";
+        final String provider = configuredTrustStore ?
+                SafePropertyAccessor.getProperty("javax.net.ssl.trustStoreProvider") : null;
+        final String password = configuredTrustStore ?
+                SafePropertyAccessor.getProperty("javax.net.ssl.trustStorePassword") : null;
+
         final FileInputStream fin = new FileInputStream(certsFile);
         int count = 0;
         try {
-            // hardcode the keystore type, as we expect cacerts to be a java keystore
-            // especially needed since Java 9 (getDefaultType on 11/13 is "pkcs12")
-            KeyStore keystore = SecurityHelper.getKeyStore("JKS");
-	        // null password - as the cacerts file isn't password protected
-            keystore.load(fin, null);
+            final KeyStore keystore;
+            if ( provider != null && ! SecurityHelper.isRequiredProviderMode() ) {
+                keystore = KeyStore.getInstance(type, provider);
+            }
+            else {
+                keystore = SecurityHelper.getKeyStore(type);
+                if ( provider != null && ! provider.equals(keystore.getProvider().getName()) ) {
+                    throw new KeyStoreException("configured trust store provider '" + provider +
+                            "' does not match required provider '" +
+                            keystore.getProvider().getName() + "'");
+                }
+            }
+            keystore.load(fin, password == null ? null : password.toCharArray());
             PKIXParameters params = new PKIXParameters(keystore);
             for ( TrustAnchor trustAnchor : params.getTrustAnchors() ) {
                 X509Certificate certificate = trustAnchor.getTrustedCert();
@@ -466,16 +491,23 @@ public class Lookup {
             switch(cmd) {
             case X509_L_FILE_LOAD:
                 if (arglInt == X509_FILETYPE_DEFAULT) {
-                    try {
-                        file = ctx.envEntry(X509_CERT_FILE_EVP); // ENV['SSL_CERT_FILE']
+                    final boolean configuredTrustStore =
+                            SafePropertyAccessor.getProperty("javax.net.ssl.trustStore") != null;
+                    if ( configuredTrustStore ) {
+                        file = SafePropertyAccessor.getProperty("javax.net.ssl.trustStore");
                     }
-                    catch (RuntimeException e) {
-                        OpenSSL.debugStackTrace(ctx.runtime, "failed to read env " + X509_CERT_FILE_EVP, e);
+                    else {
+                        try {
+                            file = ctx.envEntry(X509_CERT_FILE_EVP); // ENV['SSL_CERT_FILE']
+                        }
+                        catch (RuntimeException e) {
+                            OpenSSL.debugStackTrace(ctx.runtime, "failed to read env " + X509_CERT_FILE_EVP, e);
+                        }
+                        if (file == null) {
+                            file = X509_CERT_FILE.replace('/', File.separatorChar);
+                        }
                     }
-                    if (file == null) {
-                        file = X509_CERT_FILE.replace('/', File.separatorChar);
-                    }
-                    if (file.matches(".*\\.(crt|cer|pem)$")) {
+                    if (! configuredTrustStore && file.matches(".*\\.(crt|cer|pem)$")) {
                         ok = ctx.loadCertificateOrCRLFile(file, X509_FILETYPE_PEM) != 0 ? 1 : 0;
                     } else {
                         ok = (ctx.loadDefaultJavaCACertsFile(file) != 0) ? 1: 0;
