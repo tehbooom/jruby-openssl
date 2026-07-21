@@ -1,5 +1,6 @@
 package org.jruby.ext.openssl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.File;
@@ -25,10 +26,11 @@ import org.junit.jupiter.api.TestInstance;
  * Requires bc-fips on the classpath with non-FIPS BC artifacts excluded by the
  * fips-tests Maven profile.
  *
- * <p>Scope matches the complete {@code rake test} inventory: 39 Ruby files and
- * 523 statically defined test methods. Before the full-suite expansion, the FIPS
- * profile covered 24 files and 366 methods in eight domains; the previously
- * excluded files are listed in {@link #printScopeManifest()}.
+ * <p>Scope matches the complete {@code rake test} inventory: 39 Ruby files,
+ * 523 lexical {@code def test_*} declarations, and 522 methods defined at runtime.
+ * Before the full-suite expansion, the FIPS profile covered 24 files and 366
+ * lexical declarations in eight domains; the previously excluded files are
+ * listed in {@link #printScopeManifest()}.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class FipsRubyCoverageTest {
@@ -36,8 +38,36 @@ public class FipsRubyCoverageTest {
     private static final Path PROJECT_ROOT = Paths.get("").toAbsolutePath();
     private static final Path FIPS_GEM_HOME = PROJECT_ROOT.resolve("pkg/rubygems-fips");
     private static final String PATH_SEPARATOR = File.pathSeparator;
+    private static final int LEXICAL_TEST_DECLARATIONS = 523;
 
-    /** Complete rake-test inventory; 523 {@code def test_*} methods at last audit. */
+    /**
+     * Lexical declarations intentionally absent under JRuby/FIPS runtime conditions.
+     */
+    private static final String[] CONDITIONALLY_UNDEFINED_TESTS = {
+            "TestOpenSSL#test_gem_version",
+            "TestOpenSSLStub#test_autoload_consts_error",
+            "TestCipher#test_cipher_update_non_mod_length",
+            "TestCipher#test_cipher_update_mod_length",
+            "TestEC#test_group_encoding",
+            "TestEC#test_key_encoding",
+            "TestEC#test_set_keys"
+    };
+
+    /** Tests created with {@code define_method}, so no lexical {@code def test_*} exists. */
+    private static final String[] DYNAMICALLY_DEFINED_TESTS = {
+            "TestSSL#test_ssl_minmax_(TLSv1,)",
+            "TestSSL#test_ssl_minmax_(TLSv1.1,)",
+            "TestSSL#test_ssl_minmax_(TLSv1.2,)",
+            "TestSSL#test_ssl_minmax_(,TLSv1.2)",
+            "TestSSL#test_ssl_minmax_(TLSv1,TLSv1.2)",
+            "TestX509Store#test_add_same_cert_twice jruby/jruby-openssl#3"
+    };
+
+    private static final int EXPECTED_RUNTIME_TESTS =
+            LEXICAL_TEST_DECLARATIONS - CONDITIONALLY_UNDEFINED_TESTS.length +
+                    DYNAMICALLY_DEFINED_TESTS.length;
+
+    /** Complete rake-test file inventory. */
     private static final Map<String, List<String>> SUITES = new LinkedHashMap<>();
 
     /** Files omitted by the previous eight-domain FIPS harness. */
@@ -154,6 +184,7 @@ public class FipsRubyCoverageTest {
             }
         }
 
+        assertRuntimeInventory();
         printSummary();
 
         if (!realFindings.isEmpty()) {
@@ -169,13 +200,28 @@ public class FipsRubyCoverageTest {
         }
         System.out.println("FIPS Ruby scope: complete rake suite, " + SUITES.size() +
                 " suites, " + fipsFiles +
-                " files, 523 test methods (static def test_ count at last audit)");
-        System.out.println("Previous FIPS scope: 8 domains, 24 files, 366 test methods");
+                " files, " + EXPECTED_RUNTIME_TESTS + " runtime-defined test methods");
+        System.out.println("Ruby source inventory: " + LEXICAL_TEST_DECLARATIONS +
+                " lexical def test_ declarations - " + CONDITIONALLY_UNDEFINED_TESTS.length +
+                " conditionally undefined + " + DYNAMICALLY_DEFINED_TESTS.length +
+                " define_method tests = " + EXPECTED_RUNTIME_TESTS);
+        System.out.println("Previous FIPS scope: 8 domains, 24 files, 366 lexical declarations");
         System.out.println("Newly covered by full-suite expansion: 157 methods, " +
                 PREVIOUSLY_EXCLUDED_FILES.size() + " files:");
         for (Map.Entry<String, String> entry : PREVIOUSLY_EXCLUDED_FILES.entrySet()) {
             System.out.println("  - src/test/ruby/" + entry.getKey() + ": " + entry.getValue());
         }
+    }
+
+    private void assertRuntimeInventory() {
+        final int runtimeTests = suiteResults.values().stream()
+                .mapToInt(result -> result.ran)
+                .sum();
+        System.out.println("FIPS Ruby inventory accounting: expected=" +
+                EXPECTED_RUNTIME_TESTS + " runtime=" + runtimeTests +
+                " gap=" + (EXPECTED_RUNTIME_TESTS - runtimeTests));
+        assertEquals(EXPECTED_RUNTIME_TESTS, runtimeTests,
+                "FIPS Ruby runtime test inventory changed");
     }
 
     private SuiteResult runSuite(final String suite, final List<String> files) {
