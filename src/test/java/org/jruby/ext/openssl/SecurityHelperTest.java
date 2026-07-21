@@ -247,25 +247,56 @@ public class SecurityHelperTest {
 
     @Test
     public void strictOcspBuildersIgnoreRegisteredNonFipsBc() throws Exception {
+        boolean fipsEnvironmentRegistered = false;
+        try {
+            Class.forName("org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider");
+            FipsTestEnvironment.registerConfiguredProviders();
+            fipsEnvironmentRegistered = true;
+        }
+        catch (ClassNotFoundException ignored) {
+            // The regular test classpath does not include BCFIPS.
+        }
+
+        final java.util.function.Function<Object, Provider> configuredBuilderProvider = builder -> {
+            try {
+                final Field operatorHelperField = builder.getClass().getDeclaredField("helper");
+                operatorHelperField.setAccessible(true);
+                final Object operatorHelper = operatorHelperField.get(builder);
+                final Field jcaHelperField = operatorHelper.getClass().getDeclaredField("helper");
+                jcaHelperField.setAccessible(true);
+                final Object jcaHelper = jcaHelperField.get(operatorHelper);
+                final Field providerField = jcaHelper.getClass().getDeclaredField("provider");
+                providerField.setAccessible(true);
+                return (Provider) providerField.get(jcaHelper);
+            }
+            catch (ReflectiveOperationException ex) {
+                throw new IllegalStateException(ex);
+            }
+        };
+
         final Provider provider = new EmptyProvider("JOSSL_TEST_OCSP_REQUIRED", 1.0);
         Security.addProvider(provider);
-        Security.addProvider(savedProvider);
         try {
             System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
             SecurityHelper.configureRequiredProvider();
 
-            assertSame(provider, builderProvider(OCSP.newJcaContentSignerBuilder("SHA256withRSA")));
-            assertSame(provider, builderProvider(OCSP.newJcaContentVerifierProviderBuilder()));
-            assertSame(provider, builderProvider(OCSP.newJcaDigestCalculatorProviderBuilder()));
-            assertSame(provider, builderProvider(
+            assertSame(provider, configuredBuilderProvider.apply(
+                    OCSP.newJcaContentSignerBuilder("SHA256withRSA")));
+            assertSame(provider, configuredBuilderProvider.apply(
+                    OCSP.newJcaContentVerifierProviderBuilder()));
+            assertSame(provider, configuredBuilderProvider.apply(
+                    OCSP.newJcaDigestCalculatorProviderBuilder()));
+            assertSame(provider, configuredBuilderProvider.apply(
                     X509Cert.newJcaContentSignerBuilder("SHA256withRSA")));
-            assertSame(provider, builderProvider(
+            assertSame(provider, configuredBuilderProvider.apply(
                     org.jruby.ext.openssl.X509CRL
                             .newJcaContentSignerBuilder("SHA256withRSA")));
         }
         finally {
-            Security.removeProvider(savedProvider.getName());
             Security.removeProvider(provider.getName());
+            if (fipsEnvironmentRegistered) {
+                FipsTestEnvironment.removeConfiguredProviders();
+            }
         }
     }
 
@@ -409,22 +440,42 @@ public class SecurityHelperTest {
 
     @Test
     public void strictCrlVerificationNeverUsesBcOrJdkFallback() throws Exception {
-        final CertificateFactory bcFactory = CertificateFactory.getInstance("X.509", savedProvider);
-        final CertificateFactory jdkFactory = CertificateFactory.getInstance("X.509");
+        Provider selectedProvider;
+        boolean fipsEnvironmentRegistered = false;
+        try {
+            Class.forName("org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider");
+            FipsTestEnvironment.registerConfiguredProviders();
+            selectedProvider = FipsTestEnvironment.configuredProvider();
+            fipsEnvironmentRegistered = true;
+        }
+        catch (ClassNotFoundException ignored) {
+            // The regular test classpath uses the platform X.509 provider.
+            selectedProvider = CertificateFactory.getInstance("X.509").getProvider();
+        }
+
+        final Provider configuredProvider = selectedProvider;
+        final CertificateFactory factory =
+                CertificateFactory.getInstance("X.509", configuredProvider);
         final X509Certificate issuer;
-        final X509CRL bcCrl;
-        final X509CRL jdkCrl;
+        final X509CRL firstCrl;
+        final X509CRL secondCrl;
         try (FileInputStream in = new FileInputStream("src/test/ruby/x509/ec-ca.crt")) {
-            issuer = (X509Certificate) jdkFactory.generateCertificate(in);
+            issuer = (X509Certificate) factory.generateCertificate(in);
         }
         try (FileInputStream in = new FileInputStream("src/test/ruby/x509/ec-ca.crl")) {
-            bcCrl = (X509CRL) bcFactory.generateCRL(in);
+            firstCrl = (X509CRL) factory.generateCRL(in);
         }
         try (FileInputStream in = new FileInputStream("src/test/ruby/x509/ec-ca.crl")) {
-            jdkCrl = (X509CRL) jdkFactory.generateCRL(in);
+            secondCrl = (X509CRL) factory.generateCRL(in);
         }
-        bcCrl.verify(issuer.getPublicKey());
-        jdkCrl.verify(issuer.getPublicKey());
+        if (fipsEnvironmentRegistered) {
+            firstCrl.verify(issuer.getPublicKey(), configuredProvider);
+            secondCrl.verify(issuer.getPublicKey(), configuredProvider);
+        }
+        else {
+            firstCrl.verify(issuer.getPublicKey());
+            secondCrl.verify(issuer.getPublicKey());
+        }
 
         final Provider provider = new EmptyProvider("JOSSL_TEST_CRL_EMPTY", 1.0);
         Security.addProvider(provider);
@@ -432,12 +483,15 @@ public class SecurityHelperTest {
             System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
             SecurityHelper.configureRequiredProvider();
             assertThrows(NoSuchAlgorithmException.class,
-                    () -> SecurityHelper.verify(bcCrl, issuer.getPublicKey()));
+                    () -> SecurityHelper.verify(firstCrl, issuer.getPublicKey()));
             assertThrows(NoSuchAlgorithmException.class,
-                    () -> SecurityHelper.verify(jdkCrl, issuer.getPublicKey()));
+                    () -> SecurityHelper.verify(secondCrl, issuer.getPublicKey()));
         }
         finally {
             Security.removeProvider(provider.getName());
+            if (fipsEnvironmentRegistered) {
+                FipsTestEnvironment.removeConfiguredProviders();
+            }
         }
     }
 
