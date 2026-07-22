@@ -32,6 +32,7 @@ namespace :package do
   task :prepare do
     rm_f Dir.glob('lib/*.jar')
     sh( './mvnw clean package -Dmaven.test.skip=true' )
+    rm_f Dir.glob('pkg/*-SNAPSHOT.gem')
   end
 
   desc "Build the normal gem with Bouncy Castle jars"
