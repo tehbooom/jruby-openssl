@@ -87,6 +87,18 @@ public class FipsProviderContractTest {
     }
 
     @Test
+    void opensslFipsConstantIsTrueInStrictMode() {
+        final Ruby runtime = Ruby.newInstance();
+        try {
+            OpenSSL.createOpenSSL(runtime);
+            assertTrue(runtime.evalScriptlet("OpenSSL::OPENSSL_FIPS").isTrue());
+        }
+        finally {
+            runtime.tearDown(false);
+        }
+    }
+
+    @Test
     void setDefaultPathsHonorsConfiguredBcfksTrustStore() throws Exception {
         final Path trustStore = Files.createTempFile("jruby-openssl-fips-truststore", ".bcfks");
         final char[] password = "changeit".toCharArray();
