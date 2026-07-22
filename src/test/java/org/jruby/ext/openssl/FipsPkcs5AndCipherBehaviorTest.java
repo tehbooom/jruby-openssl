@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Group 4 FIPS behavior via actual OpenSSL Ruby entry points.
  */
-public class Group4BehaviorTest {
+public class FipsPkcs5AndCipherBehaviorTest {
 
     private static final String EXPECTED_WITH_SALT = "be90a86901bcd1cc93993c7e3ac52a886544fa0bdf2950b8";
     private static final String EXPECTED_EMPTY_SALT = "bd27c3e3558945b4bc5eb0d89f197efffc96b52be19266d9";

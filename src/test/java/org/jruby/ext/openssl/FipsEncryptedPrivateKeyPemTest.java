@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
  * legacy Proc-Type MD5 EVP_BytesToKey encrypted PEM is rejected without
  * bcprov-internal ClassNotFoundException.
  */
-public class Group1PemBehaviorTest {
+public class FipsEncryptedPrivateKeyPemTest {
 
     private static final Path PEM_FIXTURES =
             Paths.get("src/test/resources/fips/pem");

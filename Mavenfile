@@ -191,7 +191,7 @@ profile :id => 'fips-tests' do
   dependency 'org.bouncycastle', 'bctls-fips', '2.0.22', :scope => :test
 
   properties 'fips.gem.home' => '${basedir}/pkg/rubygems-fips',
-             'test' => 'FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,Group1PemBehaviorTest,Group4BehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud,SecurityHelperTest#missingRequiredProviderFailsLoud,SecurityHelperTest#requiredProviderNeverFallsBackForUnsupportedAlgorithm,SecurityHelperTest#requiredProviderNeverFallsBackForKeyStore,SecurityHelperTest#strictOcspBuildersIgnoreRegisteredNonFipsBc,SecurityHelperTest#requiredProvidersNeverFallbackAcrossWrapperAudit,SecurityHelperTest#requiredSslProviderRoutesByRegisteredNameAndFailsAfterRemoval,SecurityHelperTest#requiredSslProviderNeverFallsBackForUnsupportedProtocol,SecurityHelperTest#strictJceWithoutRequiredSslProviderFailsLoud,SecurityHelperTest#strictLegacyBcjsseLookupNeverConstructsUnregisteredProvider,SecurityHelperTest#missingRequiredSslProviderFailsBeforeLegacyInstantiation,SecurityHelperTest#strictCrlVerificationNeverUsesBcOrJdkFallback'
+             'test' => 'FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,FipsEncryptedPrivateKeyPemTest,FipsPkcs5AndCipherBehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud,SecurityHelperTest#missingRequiredProviderFailsLoud,SecurityHelperTest#requiredProviderNeverFallsBackForUnsupportedAlgorithm,SecurityHelperTest#requiredProviderNeverFallsBackForKeyStore,SecurityHelperTest#strictOcspBuildersIgnoreRegisteredNonFipsBc,SecurityHelperTest#requiredProvidersNeverFallbackAcrossWrapperAudit,SecurityHelperTest#requiredSslProviderRoutesByRegisteredNameAndFailsAfterRemoval,SecurityHelperTest#requiredSslProviderNeverFallsBackForUnsupportedProtocol,SecurityHelperTest#strictJceWithoutRequiredSslProviderFailsLoud,SecurityHelperTest#strictLegacyBcjsseLookupNeverConstructsUnregisteredProvider,SecurityHelperTest#missingRequiredSslProviderFailsBeforeLegacyInstantiation,SecurityHelperTest#strictCrlVerificationNeverUsesBcOrJdkFallback'
 
   plugin_repository :id => 'mavengems', :url => 'mavengem:https://rubygems.org'
 
@@ -220,8 +220,8 @@ profile :id => 'fips-tests' do
         '**/FipsProviderContractTest.java',
         '**/FipsRubyCoverageTest.java',
         '**/FipsSkipEnforcementTest.java',
-        '**/Group1PemBehaviorTest.java',
-        '**/Group4BehaviorTest.java'
+        '**/FipsEncryptedPrivateKeyPemTest.java',
+        '**/FipsPkcs5AndCipherBehaviorTest.java'
       ],
       :classpathDependencyExcludes => [
         'org.bouncycastle:bcprov-jdk18on',
