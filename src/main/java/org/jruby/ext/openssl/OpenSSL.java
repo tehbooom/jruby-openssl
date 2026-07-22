@@ -116,7 +116,8 @@ public final class OpenSSL {
         _OpenSSL.setConstant("OPENSSL_VERSION_NUMBER", runtime.newFixnum(OPENSSL_VERSION_NUMBER));
         // MRI 2.3 tests do: /\AOpenSSL +0\./ !~ OpenSSL::OPENSSL_LIBRARY_VERSION
         _OpenSSL.setConstant("OPENSSL_LIBRARY_VERSION", VERSION);
-        _OpenSSL.setConstant("OPENSSL_FIPS", runtime.getFalse());
+        _OpenSSL.setConstant("OPENSSL_FIPS",
+                runtime.newBoolean(SecurityHelper.isRequiredProviderMode()));
     }
 
     static RubyClass _OpenSSLError(final Ruby runtime) {
