@@ -129,7 +129,7 @@ public class PKeyRSA extends PKey {
     }
 
     static RaiseException newRSAError(Ruby runtime, Throwable cause) {
-        return newRSAError(runtime, cause.getMessage(), cause);
+        return newRSAError(runtime, Utils.exceptionMessage(cause), cause);
     }
 
     static RaiseException newRSAError(Ruby runtime, String message, Throwable cause) {
@@ -233,7 +233,7 @@ public class PKeyRSA extends PKey {
             return generateImpl(runtime, rsa, keySize, exp);
         }
         catch (NoSuchAlgorithmException|InvalidAlgorithmParameterException e) {
-            throw newRSAError(runtime, e.getMessage());
+            throw newRSAError(runtime, e);
         }
         catch (RuntimeException e) {
             throw newRSAError(runtime, e);
@@ -270,10 +270,10 @@ public class PKeyRSA extends PKey {
             rsaFactory = SecurityHelper.getKeyFactory("RSA");
         }
         catch (NoSuchAlgorithmException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (RSA)");
+            throw newRSAError(runtime, "unsupported key algorithm (RSA)");
         }
         catch (RuntimeException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (RSA) " + e);
+            throw newRSAError(runtime, "unsupported key algorithm (RSA) " + Utils.exceptionMessage(e), e);
         }
         // TODO: ugly NoClassDefFoundError catching for no BC env. How can we remove this?
         boolean noClassDef = false;
@@ -348,7 +348,7 @@ public class PKeyRSA extends PKey {
             try {
                 this.publicKey = (RSAPublicKey) rsaFactory.generatePublic(new RSAPublicKeySpec(privateKey.getModulus(), exponent));
             } catch (GeneralSecurityException e) {
-                throw newRSAError(runtime, e.getMessage());
+                throw newRSAError(runtime, e);
             } catch (RuntimeException e) {
                 debugStackTrace(runtime, e);
                 throw newRSAError(runtime, e.toString());
@@ -684,7 +684,7 @@ public class PKeyRSA extends PKey {
             return StringHelper.newString(runtime, output);
         }
         catch (GeneralSecurityException gse) {
-            throw newRSAError(runtime, gse.getMessage());
+            throw newRSAError(runtime, gse);
         }
     }
 

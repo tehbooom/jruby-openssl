@@ -775,6 +775,8 @@ DO NOT MODIFY - GENERATED CODE
                     <include>**/FipsSkipEnforcementTest.java</include>
                     <include>**/FipsEncryptedPrivateKeyPemTest.java</include>
                     <include>**/FipsPkcs5AndCipherBehaviorTest.java</include>
+                    <include>**/SecurityHelperTest.java</include>
+                    <include>**/UtilsTest.java</include>
                   </includes>
                   <classpathDependencyExcludes>
                     <classpathDependencyExclude>org.bouncycastle:bcprov-jdk18on</classpathDependencyExclude>
@@ -793,7 +795,7 @@ DO NOT MODIFY - GENERATED CODE
       </build>
       <properties>
         <fips.gem.home>${basedir}/pkg/rubygems-fips</fips.gem.home>
-        <test>FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,FipsEncryptedPrivateKeyPemTest,FipsPkcs5AndCipherBehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud,SecurityHelperTest#missingRequiredProviderFailsLoud,SecurityHelperTest#requiredProviderNeverFallsBackForUnsupportedAlgorithm,SecurityHelperTest#requiredProviderNeverFallsBackForKeyStore,SecurityHelperTest#strictOcspBuildersIgnoreRegisteredNonFipsBc,SecurityHelperTest#requiredProvidersNeverFallbackAcrossWrapperAudit,SecurityHelperTest#requiredSslProviderRoutesByRegisteredNameAndFailsAfterRemoval,SecurityHelperTest#requiredSslProviderNeverFallsBackForUnsupportedProtocol,SecurityHelperTest#strictJceWithoutRequiredSslProviderFailsLoud,SecurityHelperTest#strictLegacyBcjsseLookupNeverConstructsUnregisteredProvider,SecurityHelperTest#missingRequiredSslProviderFailsBeforeLegacyInstantiation,SecurityHelperTest#strictCrlVerificationNeverUsesBcOrJdkFallback</test>
+        <test>FipsProviderContractTest,FipsRubyCoverageTest,FipsSkipEnforcementTest,FipsEncryptedPrivateKeyPemTest,FipsPkcs5AndCipherBehaviorTest,SecurityHelperTest#mismatchedRequiredProviderVersionFailsLoud,SecurityHelperTest#missingRequiredProviderFailsLoud,SecurityHelperTest#requiredProviderNeverFallsBackForUnsupportedAlgorithm,SecurityHelperTest#requiredProviderNeverFallsBackForKeyStore,SecurityHelperTest#strictOcspBuildersIgnoreRegisteredNonFipsBc,SecurityHelperTest#requiredProvidersNeverFallbackAcrossWrapperAudit,SecurityHelperTest#requiredSslProviderRoutesByRegisteredNameAndFailsAfterRemoval,SecurityHelperTest#requiredSslProviderNeverFallsBackForUnsupportedProtocol,SecurityHelperTest#strictJceWithoutRequiredSslProviderFailsLoud,SecurityHelperTest#strictLegacyBcjsseLookupNeverConstructsUnregisteredProvider,SecurityHelperTest#missingRequiredSslProviderFailsBeforeLegacyInstantiation,SecurityHelperTest#strictCrlVerificationNeverUsesBcOrJdkFallback,SecurityHelperTest#strictCertificateVerificationPinsRequiredProvider,SecurityHelperTest#strictEvpSha1ThrowsForMissingDigestInRequiredProviderMode,SecurityHelperTest#strictPemPublicKeyReadThrowsForMissingKeyFactory,SecurityHelperTest#strictEcParamSpecNeverFallsBackToBcTables,SecurityHelperTest#strictAuxCertificateVerificationIgnoresSuppliedProvider,UtilsTest</test>
       </properties>
       <dependencies>
         <dependency>

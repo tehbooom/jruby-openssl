@@ -42,6 +42,7 @@ import java.security.KeyStoreException;
 import java.security.MessageDigest;
 import java.security.MessageDigestSpi;
 import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.security.Provider;
 import java.security.PublicKey;
 import java.security.SecureRandom;
@@ -55,6 +56,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.CertificateFactorySpi;
 import java.security.cert.X509CRL;
+import java.security.cert.X509Certificate;
 import java.util.Locale;
 import java.util.Map;
 import java.util.StringTokenizer;
@@ -128,10 +130,10 @@ public abstract class SecurityHelper {
         if ( required != null ) return required;
 
         Provider provider = securityProvider;
-        if ( setBouncyCastleProvider && provider == null ) {
+        if ( setBouncyCastleProvider && provider == null && !isRequiredProviderMode() ) {
             synchronized(SecurityHelper.class) {
                 provider = securityProvider;
-                if ( setBouncyCastleProvider && provider == null ) {
+                if ( setBouncyCastleProvider && provider == null && !isRequiredProviderMode() ) {
                     provider = setBouncyCastleProvider();
                     setBouncyCastleProvider = false;
                 }
@@ -286,7 +288,11 @@ public abstract class SecurityHelper {
     static {
         boolean canSetAccessible = true;
         if ( OpenSSL.javaVersion9(true) ) {
-            final Provider provider = getSecurityProvider();
+            // Strict required-provider mode must not load/instantiate non-FIPS BC during
+            // SecurityHelper class initialization, before configureRequiredProvider() runs.
+            final Provider provider = isRequiredProviderMode() ||
+                    SafePropertyAccessor.getProperty(REQUIRED_PROVIDER_PROPERTY) != null ?
+                    requiredProvider : getSecurityProvider();
             if ( provider != null ) {
                 try {
                     // NOTE: some getXxx pieces might still work
@@ -319,6 +325,7 @@ public abstract class SecurityHelper {
     }
 
     static synchronized Provider setBouncyCastleProvider() {
+        if ( isRequiredProviderMode() ) return null;
         Provider provider = newBouncyCastleProvider(BC_PROVIDER_CLASS);
         setSecurityProvider(provider);
         return provider;
@@ -760,6 +767,15 @@ public abstract class SecurityHelper {
     private static SSLContext getSSLContext(final String protocol, final Provider provider)
         throws NoSuchAlgorithmException {
         return SSLContext.getInstance(protocol, provider);
+    }
+
+    public static boolean verify(final X509Certificate cert, final PublicKey publicKey)
+        throws CertificateException, NoSuchAlgorithmException, InvalidKeyException,
+        NoSuchProviderException, SignatureException {
+        final Provider required = requiredProvider;
+        if ( required != null ) cert.verify(publicKey, required.getName());
+        else cert.verify(publicKey);
+        return true;
     }
 
     public static boolean verify(final X509CRL crl, final PublicKey publicKey)

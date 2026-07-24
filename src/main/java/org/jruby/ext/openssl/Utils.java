@@ -47,8 +47,16 @@ final class Utils {
 
     private Utils() {}
 
+    static String exceptionMessage(Throwable e) {
+        final String msg = e.getMessage();
+        if (msg == null || msg.isEmpty()) {
+            return e.getClass().getName();
+        }
+        return msg;
+    }
+
     static RaiseException newIOError(Ruby runtime, IOException e) {
-        return newIOError(runtime, e.getMessage(), e);
+        return newIOError(runtime, exceptionMessage(e), e);
     }
 
     static RaiseException newIOError(Ruby runtime, String msg) {
@@ -62,7 +70,7 @@ final class Utils {
     }
 
     static RaiseException newRuntimeError(Ruby runtime, Exception e) {
-        return newRuntimeError(runtime, e.getMessage(), e);
+        return newRuntimeError(runtime, exceptionMessage(e), e);
     }
 
     static RaiseException newRuntimeError(Ruby runtime, String msg, Exception e) {
@@ -89,7 +97,7 @@ final class Utils {
     }
 
     static RaiseException newError(Ruby runtime, RubyClass errorClass, Throwable e) {
-        return newError(runtime, errorClass, e.getMessage(), e);
+        return newError(runtime, errorClass, exceptionMessage(e), e);
     }
 
     static RaiseException newError(Ruby runtime, RubyClass errorClass, String msg) {

@@ -412,7 +412,7 @@ public abstract class PKey extends RubyObject {
         if (PrivateKey.class.isAssignableFrom(target)) {
             final PrivateKey key = getPrivateKey();
             if (key == null) {
-                throw getRuntime().newRuntimeError("private key not available, to convert to " + target);
+                throw newPKeyError(getRuntime(), "private key not available, to convert to " + target);
             }
             if (target.isInstance(key)) return key;
             throw getRuntime().newTypeError("cannot convert private key of type " + key.getClass() + " to " + target);
@@ -421,7 +421,7 @@ public abstract class PKey extends RubyObject {
             // default is public key, also want to_java() as well as to_java(java.lang.Object) to end up here
             final PublicKey key = getPublicKey();
             if (key == null) {
-                throw getRuntime().newRuntimeError("public key not available, to convert to " + target);
+                throw newPKeyError(getRuntime(), "public key not available, to convert to " + target);
             }
             if (target.isInstance(key)) return key;
             throw getRuntime().newTypeError("cannot convert public key of type " + key.getClass() + " to " + target);

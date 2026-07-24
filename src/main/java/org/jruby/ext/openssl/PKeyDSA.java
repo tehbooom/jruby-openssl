@@ -166,10 +166,10 @@ public class PKeyDSA extends PKey {
             return generateImpl(runtime, dsa, keySize);
         }
         catch (NoSuchAlgorithmException e) {
-            throw newDSAError(runtime, e.getMessage());
+            throw newDSAError(runtime, Utils.exceptionMessage(e), e);
         }
         catch (RuntimeException e) {
-            throw newDSAError(runtime, e.getMessage(), e);
+            throw newDSAError(runtime, Utils.exceptionMessage(e), e);
         }
     }
 
@@ -199,10 +199,10 @@ public class PKeyDSA extends PKey {
             dsaFactory = SecurityHelper.getKeyFactory("DSA");
         }
         catch (NoSuchAlgorithmException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (DSA)");
+            throw newDSAError(runtime, "unsupported key algorithm (DSA)");
         }
         catch (RuntimeException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (DSA) " + e);
+            throw newDSAError(runtime, "unsupported key algorithm (DSA) " + Utils.exceptionMessage(e), e);
         }
         // TODO: ugly NoClassDefFoundError catching for no BC env. How can we remove this?
         boolean noClassDef = false;

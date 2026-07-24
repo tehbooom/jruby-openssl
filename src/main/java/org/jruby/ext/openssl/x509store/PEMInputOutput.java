@@ -104,6 +104,7 @@ import org.bouncycastle.cms.CMSException;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.util.encoders.Hex;
 import org.bouncycastle.cms.CMSSignedData;
+import org.bouncycastle.openssl.PEMException;
 
 import org.jruby.ext.openssl.Cipher.Algorithm;
 import org.jruby.ext.openssl.impl.ASN1Registry;
@@ -1163,7 +1164,12 @@ public class PEMInputOutput {
         try {
             return (RSAPublicKey) SecurityHelper.getKeyFactory("RSA").generatePublic(keySpec);
         }
-        catch (NoSuchAlgorithmException e) { /* ignore */ }
+        catch (NoSuchAlgorithmException e) {
+            if (SecurityHelper.isRequiredProviderMode()) {
+                // Required-provider mode must not mask missing key factory as null key.
+                throw new PEMException("Algorithm not available from required provider: " + e.getMessage(), e);
+            }
+        }
         catch (InvalidKeySpecException e) { /* ignore */ }
         return null;
     }
@@ -1183,7 +1189,12 @@ public class PEMInputOutput {
         try {
             return (DSAPublicKey) SecurityHelper.getKeyFactory("DSA").generatePublic(keySpec);
         }
-        catch (NoSuchAlgorithmException e) { /* ignore */ }
+        catch (NoSuchAlgorithmException e) {
+            if (SecurityHelper.isRequiredProviderMode()) {
+                // Required-provider mode must not mask missing key factory as null key.
+                throw new PEMException("Algorithm not available from required provider: " + e.getMessage(), e);
+            }
+        }
         catch (InvalidKeySpecException e) { /* ignore */ }
         return null;
     }
@@ -1193,7 +1204,12 @@ public class PEMInputOutput {
         try {
             return SecurityHelper.getKeyFactory(alg).generatePublic(keySpec);
         }
-        catch (NoSuchAlgorithmException e) { /* ignore */ }
+        catch (NoSuchAlgorithmException e) {
+            if (SecurityHelper.isRequiredProviderMode()) {
+                // Required-provider mode must not mask missing key factory as null key.
+                throw new PEMException("Algorithm not available from required provider: " + e.getMessage(), e);
+            }
+        }
         catch (InvalidKeySpecException e) { /* ignore */ }
         return null;
     }

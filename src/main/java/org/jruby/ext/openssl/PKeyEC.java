@@ -269,10 +269,10 @@ public final class PKeyEC extends PKey {
             ecdsaFactory = SecurityHelper.getKeyFactory("EC");
         }
         catch (NoSuchAlgorithmException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (EC)");
+            throw newECError(runtime, "unsupported key algorithm (EC)");
         }
         catch (RuntimeException e) {
-            throw runtime.newRuntimeError("unsupported key algorithm (EC) " + e);
+            throw newECError(runtime, "unsupported key algorithm (EC) " + Utils.exceptionMessage(e), e);
         }
         // TODO: ugly NoClassDefFoundError catching for no BC env. How can we remove this?
         boolean noClassDef = false;
@@ -522,6 +522,10 @@ public final class PKeyEC extends PKey {
             return runtime.newBoolean(verified);
         }
         catch (GeneralSecurityException | IOException | IllegalArgumentException | IllegalStateException ex) {
+            if (SecurityHelper.isRequiredProviderMode() && ex instanceof NoSuchAlgorithmException) {
+                // Required-provider mode must not mask missing signature algorithm as verify failure.
+                throw newECError(runtime, ex.getMessage(), ex);
+            }
             debugStackTrace(runtime, ex);
             return runtime.getFalse();
         }
@@ -1346,6 +1350,11 @@ public final class PKeyEC extends PKey {
                 return algParams.getParameterSpec(ECParameterSpec.class);
             }
             catch (GeneralSecurityException ex) {
+                if (SecurityHelper.isRequiredProviderMode()) {
+                    // Required-provider mode must not fall back to BC curve tables for EC params.
+                    throw new IllegalStateException(
+                            "EC parameters unavailable from required provider: " + ex.getMessage(), ex);
+                }
                 X9ECParameters x9 = ECNamedCurveTable.getByName(curveName);
                 if (x9 == null) x9 = org.bouncycastle.asn1.sec.SECNamedCurves.getByName(curveName);
                 if (x9 == null) x9 = org.bouncycastle.asn1.nist.NISTNamedCurves.getByName(curveName);
@@ -1400,7 +1409,12 @@ public final class PKeyEC extends PKey {
                     return new X962Parameters(curveOid.get());
                 }
             }
-            catch (GeneralSecurityException ignored) {
+            catch (GeneralSecurityException ex) {
+                if (SecurityHelper.isRequiredProviderMode()) {
+                    // Required-provider mode must not fall back to explicit BC curve encoding.
+                    throw new IllegalStateException(
+                            "EC domain parameters unavailable from required provider: " + ex.getMessage(), ex);
+                }
                 // explicit parameters
             }
             final ECCurve curve = jcaCurveToBcCurve(ecSpec);

@@ -445,7 +445,14 @@ public class PKCS7 {
         PKCS7 p7 = new PKCS7();
         p7.setType(ASN1Registry.NID_pkcs7_signed);
         p7.contentNew(ASN1Registry.NID_pkcs7_data);
-        SignerInfoWithPkey si = p7.addSignature(signcert, pkey, EVP.sha1());
+        final MessageDigest sha1Digest;
+        try {
+            sha1Digest = EVP.sha1();
+        }
+        catch (NoSuchAlgorithmException e) {
+            throw new PKCS7Exception(F_PKCS7_SIGN, R_PKCS7_ADD_SIGNATURE_ERROR, e);
+        }
+        SignerInfoWithPkey si = p7.addSignature(signcert, pkey, sha1Digest);
         if ( (flags & NOCERTS) == 0 ) {
             p7.addCertificate(signcert);
             if(certs != null) {

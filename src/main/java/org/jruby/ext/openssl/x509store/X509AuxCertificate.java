@@ -306,14 +306,19 @@ public class X509AuxCertificate extends X509Certificate implements Cloneable {
     @Override
     public void verify(PublicKey key) throws CertificateException, NoSuchAlgorithmException,
         InvalidKeyException, NoSuchProviderException, SignatureException {
-        cert.verify(key);
+        SecurityHelper.verify(cert, key);
     }
 
     @Override
     public void verify(PublicKey key, String sigProvider) throws CertificateException,
         NoSuchAlgorithmException, InvalidKeyException, NoSuchProviderException,
         SignatureException {
-        cert.verify(key,sigProvider);
+        if ( SecurityHelper.isRequiredProviderMode() ) {
+            SecurityHelper.verify(cert, key);
+        }
+        else {
+            cert.verify(key, sigProvider);
+        }
     }
 
     @Override

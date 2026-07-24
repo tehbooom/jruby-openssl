@@ -74,11 +74,15 @@ public class EVP {
     /* c: EVP_sha1
      *
      */
-    public static MessageDigest sha1() {
+    public static MessageDigest sha1() throws NoSuchAlgorithmException {
         try {
             return SecurityHelper.getMessageDigest("SHA1");
         }
         catch (NoSuchAlgorithmException e) {
+            if (SecurityHelper.isRequiredProviderMode()) {
+                // Required-provider mode must not mask missing digest as null.
+                throw e;
+            }
             return null;
         }
     }

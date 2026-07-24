@@ -63,7 +63,7 @@ public class KDF {
             return PKCS5.pbkdf2Hmac(context.runtime, args);
         }
         catch (NoSuchAlgorithmException|InvalidKeyException e) {
-            throw newKDFError(context.runtime, e.getMessage());
+            throw newKDFError(context.runtime, Utils.exceptionMessage(e), e);
         }
     }
 
@@ -74,7 +74,7 @@ public class KDF {
             return hkdfImpl(context.runtime, ikm, args);
         }
         catch (NoSuchAlgorithmException|InvalidKeyException e) {
-            throw newKDFError(context.runtime, e.getMessage());
+            throw newKDFError(context.runtime, Utils.exceptionMessage(e), e);
         }
     }
 
@@ -208,7 +208,7 @@ public class KDF {
                 final Exception cause = target instanceof Exception ?
                         (Exception) target : e;
                 throw newKDFError(runtime,
-                        "FipsKDF HKDF failed: " + cause.getMessage(), cause);
+                        "FipsKDF HKDF failed: " + Utils.exceptionMessage(cause), cause);
             }
         }
     }

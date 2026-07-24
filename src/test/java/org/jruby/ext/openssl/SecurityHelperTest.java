@@ -11,12 +11,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.StringReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
+import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.security.Signature;
@@ -25,6 +28,9 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509CRL;
 import java.security.cert.X509Certificate;
 
+import org.bouncycastle.openssl.PEMException;
+import org.jruby.ext.openssl.impl.EVP;
+import org.jruby.ext.openssl.x509store.PEMInputOutput;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLContextSpi;
@@ -35,6 +41,7 @@ import javax.net.ssl.SSLSessionContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import org.jruby.Ruby;
+import org.jruby.ext.openssl.x509store.X509AuxCertificate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -492,6 +499,171 @@ public class SecurityHelperTest {
             if (fipsEnvironmentRegistered) {
                 FipsTestEnvironment.removeConfiguredProviders();
             }
+        }
+    }
+
+    @Test
+    public void strictModeNeverInstantiatesNonFipsBcProvider() throws Exception {
+        try {
+            Class.forName("org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider");
+        }
+        catch (ClassNotFoundException ignored) {
+            // The regular test classpath does not include BCFIPS.
+            return;
+        }
+
+        boolean fipsEnvironmentRegistered = false;
+        try {
+            FipsTestEnvironment.registerConfiguredProviders();
+            fipsEnvironmentRegistered = true;
+
+            assertTrue(SecurityHelper.isRequiredProviderMode());
+            assertNull(Security.getProvider("BC"),
+                    "strict mode must not register non-FIPS BC provider");
+            assertNull(SecurityHelper.securityProvider,
+                    "strict mode must not instantiate non-FIPS BC security provider");
+            assertSame(FipsTestEnvironment.configuredProvider(),
+                    SecurityHelper.getSecurityProvider());
+        }
+        finally {
+            if (fipsEnvironmentRegistered) {
+                FipsTestEnvironment.removeConfiguredProviders();
+            }
+        }
+    }
+
+    @Test
+    public void strictEvpSha1ThrowsForMissingDigestInRequiredProviderMode() throws Exception {
+        final Provider provider = new EmptyProvider("JOSSL_TEST_EVP_SHA1_EMPTY", 1.0);
+        Security.addProvider(provider);
+        try {
+            System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
+            SecurityHelper.configureRequiredProvider();
+            assertThrows(NoSuchAlgorithmException.class, EVP::sha1);
+        }
+        finally {
+            Security.removeProvider(provider.getName());
+        }
+    }
+
+    @Test
+    public void strictPemPublicKeyReadThrowsForMissingKeyFactory() throws Exception {
+        final Provider provider = new EmptyProvider("JOSSL_TEST_PEM_KEY_EMPTY", 1.0);
+        Security.addProvider(provider);
+        try {
+            System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
+            SecurityHelper.configureRequiredProvider();
+            final IOException error = assertThrows(IOException.class,
+                    () -> PEMInputOutput.readRSAPublicKey(
+                            new StringReader(new String(java.nio.file.Files.readAllBytes(
+                                    java.nio.file.Paths.get(
+                                            "src/test/ruby/fixtures/pkey/custom/rsa-2048-public.pem")))),
+                            null));
+            assertTrue(error.getCause() instanceof PEMException);
+            assertTrue(error.getCause().getMessage()
+                    .contains("Algorithm not available from required provider"));
+        }
+        finally {
+            Security.removeProvider(provider.getName());
+        }
+    }
+
+    @Test
+    public void strictEcParamSpecNeverFallsBackToBcTables() throws Exception {
+        final Provider provider = new EmptyProvider("JOSSL_TEST_EC_PARAMS_EMPTY", 1.0);
+        Security.addProvider(provider);
+        try {
+            System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
+            SecurityHelper.configureRequiredProvider();
+
+            final Class<?> bcInternal = Class.forName("org.jruby.ext.openssl.PKeyEC$BCInternal");
+            final Method getParamSpec = bcInternal.getDeclaredMethod("getParamSpec", String.class);
+            getParamSpec.setAccessible(true);
+
+            final java.lang.reflect.InvocationTargetException error =
+                    assertThrows(java.lang.reflect.InvocationTargetException.class,
+                            () -> getParamSpec.invoke(null, "prime256v1"));
+            assertTrue(error.getCause() instanceof IllegalStateException);
+            assertTrue(error.getCause().getMessage()
+                    .contains("EC parameters unavailable from required provider"));
+        }
+        finally {
+            Security.removeProvider(provider.getName());
+        }
+    }
+
+    @Test
+    public void strictCertificateVerificationPinsRequiredProvider() throws Exception {
+        final X509Certificate issuer;
+        try (FileInputStream in = new FileInputStream("src/test/ruby/x509/ec-ca.crt")) {
+            issuer = (X509Certificate) CertificateFactory.getInstance("X.509")
+                    .generateCertificate(in);
+        }
+
+        final boolean[] oneArgumentVerifyCalled = { false };
+        final String[] verifiedProviderName = { null };
+        final X509Certificate certificate = new X509AuxCertificate(issuer) {
+            @Override
+            public void verify(final PublicKey key) {
+                oneArgumentVerifyCalled[0] = true;
+            }
+
+            @Override
+            public void verify(final PublicKey key, final String providerName) {
+                verifiedProviderName[0] = providerName;
+            }
+        };
+
+        final Provider provider = new EmptyProvider("JOSSL_TEST_CERT_EMPTY", 1.0);
+        Security.addProvider(provider);
+        try {
+            System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
+            SecurityHelper.configureRequiredProvider();
+
+            assertTrue(SecurityHelper.verify(certificate, issuer.getPublicKey()));
+            assertEquals(provider.getName(), verifiedProviderName[0]);
+            assertFalse(oneArgumentVerifyCalled[0]);
+        }
+        finally {
+            Security.removeProvider(provider.getName());
+        }
+    }
+
+    @Test
+    public void strictAuxCertificateVerificationIgnoresSuppliedProvider() throws Exception {
+        final X509Certificate issuer;
+        try (FileInputStream in = new FileInputStream("src/test/ruby/x509/ec-ca.crt")) {
+            issuer = (X509Certificate) CertificateFactory.getInstance("X.509")
+                    .generateCertificate(in);
+        }
+
+        final boolean[] oneArgumentVerifyCalled = { false };
+        final String[] verifiedProviderName = { null };
+        final X509Certificate delegate = new X509AuxCertificate(issuer) {
+            @Override
+            public void verify(final PublicKey key) {
+                oneArgumentVerifyCalled[0] = true;
+            }
+
+            @Override
+            public void verify(final PublicKey key, final String providerName) {
+                verifiedProviderName[0] = providerName;
+            }
+        };
+        final X509AuxCertificate certificate = new X509AuxCertificate(delegate);
+
+        final Provider provider = new EmptyProvider("JOSSL_TEST_AUX_CERT_EMPTY", 1.0);
+        Security.addProvider(provider);
+        try {
+            System.setProperty(SecurityHelper.REQUIRED_PROVIDER_PROPERTY, provider.getName());
+            SecurityHelper.configureRequiredProvider();
+
+            certificate.verify(issuer.getPublicKey(), "JOSSL_WRONG_PROVIDER");
+            assertEquals(provider.getName(), verifiedProviderName[0]);
+            assertFalse(oneArgumentVerifyCalled[0]);
+        }
+        finally {
+            Security.removeProvider(provider.getName());
         }
     }
 

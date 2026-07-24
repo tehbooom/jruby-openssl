@@ -559,7 +559,7 @@ public class SSLContext extends RubyObject {
             return runtime.newArrayNoCopy(cipherList);
         }
         catch (GeneralSecurityException gse) {
-            throw newSSLError(runtime, gse.getMessage());
+            throw newSSLError(runtime, gse);
         }
     }
 

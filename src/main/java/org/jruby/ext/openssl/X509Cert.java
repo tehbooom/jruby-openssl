@@ -814,7 +814,7 @@ public class X509Cert extends RubyObject {
         if ( changed ) return runtime.getFalse();
 
         try {
-            cert.verify(((PKey) key).getPublicKey());
+            SecurityHelper.verify(cert, ((PKey) key).getPublicKey());
             return runtime.getTrue();
         }
         catch (CertificateException e) {

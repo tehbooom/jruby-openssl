@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.security.GeneralSecurityException;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.cert.CRLException;
@@ -705,6 +706,10 @@ public class X509CRL extends RubyObject {
             return context.runtime.newBoolean(valid);
         }
         catch (GeneralSecurityException e) {
+            if (SecurityHelper.isRequiredProviderMode() && e instanceof NoSuchAlgorithmException) {
+                // Required-provider mode must not mask missing signature algorithm as verify failure.
+                throw newCRLError(context.runtime, e);
+            }
             debug("CRL#verify() failed:", e);
             return context.runtime.getFalse();
         }
